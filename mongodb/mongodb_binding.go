@@ -268,7 +268,7 @@ func (b *MongoServiceBinding) GenerateAccount(ctx context.Context, bindingId, bi
 // createRole; no pre-check is needed.
 func (b *MongoServiceBinding) generateSelfHostedAccount(ctx context.Context, userName, password, databaseName string, isDerived bool) ([]binding.Artifact, error) {
 	artifacts := []binding.Artifact{}
-	userRoles := bson.A{}
+	var userRoles bson.A
 	if isDerived {
 		// The derived binding user's only role is its own custom role, which
 		// starts with no privileges: the user can authenticate but every data
