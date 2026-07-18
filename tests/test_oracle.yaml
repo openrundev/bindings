@@ -1,0 +1,400 @@
+# Oracle binding tests. Oracle differences from the postgres/mysql/sqlserver
+# suites:
+#   - `*` grants expand to per-object grants on the schema's current objects;
+#     objects created later need `binding update --reapply-all` (pre-23ai Oracle
+#     has no schema-scoped privileges or default-privilege mechanism).
+#   - The `create` grant type is not supported (only the database-wide CREATE
+#     ANY TABLE privilege could back it, which is too broad).
+#   - Selecting a table without SELECT privilege fails with ORA-00942 "table or
+#     view does not exist" (Oracle hides objects the user cannot access);
+#     writing to a visible table without the privilege fails with ORA-01031
+#     "insufficient privileges" before 23ai and ORA-41900 "missing <op>
+#     privilege" from 23ai on, so those assertions match just "privilege".
+#     Missing sequences report ORA-02289 before 23ai and ORA-00942 from 23ai,
+#     so those assertions match "does not exist".
+#   - Unquoted identifiers and column aliases are uppercased by Oracle.
+config:
+  env:
+    CL_CONFIG_FILE: ${CL_CONFIG_FILE}
+    OPENRUN_BIN: ${OPENRUN_BIN}
+    ORACLE_PROVIDER_BIN: ${ORACLE_PROVIDER_BIN}
+    PATH: ${PATH}
+    TEST_ORACLE_URL: ${TEST_ORACLE_URL}
+
+tests:
+  oracle0000a: # provider install from a local binary registers it in the DB (RPC layer from here on)
+    command: ${OPENRUN_BIN} provider install oracle --source-url ${ORACLE_PROVIDER_BIN}
+    stdout: "Provider oracle dev installed"
+    exit-code: 0
+
+  oracle0000b: # provider list shows the served service types
+    command: ${OPENRUN_BIN} provider list -f json | jq -r '.[] | select(.name=="oracle") | .service_types | join(",")'
+    stdout: "oracle"
+
+  oracle0000c: # install records the binary checksum for this platform
+    command: ${OPENRUN_BIN} provider list -f json | jq -r '.[] | select(.name=="oracle") | .checksums | length'
+    stdout: "1"
+
+  oracle0001:
+    command: ${OPENRUN_BIN} service create --config url=${TEST_ORACLE_URL} oracle/or1
+    stdout: "Service oracle/or1 created"
+    exit-code: 0
+
+  oracle0010:
+    command: ${OPENRUN_BIN} binding create oracle/or1 /apps/or1
+    stdout: "Binding /apps/or1 created"
+    exit-code: 0
+
+  oracle0010a: # account url automatically maps localhost to a container hostname
+    command: ${OPENRUN_BIN} binding show-account /apps/or1 | jq -r '.url | startswith("oracle://") and (contains("@host.docker.internal") or contains("@host.containers.internal"))'
+    stdout: "true"
+
+  oracle0010b: # direct account url keeps the service hostname
+    command: ${OPENRUN_BIN} binding show-account /apps/or1 | jq -r '.url != .url_direct'
+    stdout: "true"
+
+  oracle0011: # prod and staging accounts use different users (user = schema in Oracle)
+    command: bash -c 'prod=$(${OPENRUN_BIN} binding run-command /apps/or1 "select user as u from dual" | jq -r ".rows[0].U"); stage=$(${OPENRUN_BIN} binding run-command --staging /apps/or1 "select user as u from dual" | jq -r ".rows[0].U"); [[ "$prod" != "$stage" ]] && echo true'
+    stdout: "true"
+
+  oracle0012: # the create grant type is not supported for oracle
+    command: ${OPENRUN_BIN} binding create --grant "create:*" /apps/or1 /apps/orcreate
+    stderr: "unsupported grant type"
+    exit-code: 1
+
+  oracle0020: # table-specific grant can be created before the table exists
+    command: ${OPENRUN_BIN} binding create --grant "read:test1" /apps/or1 /apps/or1partialread
+    stdout: "Binding /apps/or1partialread created"
+
+  oracle0021: # before creation, the target table is absent
+    command: ${OPENRUN_BIN} binding run-command /apps/or1partialread "select count(*) as n from test1"
+    stderr: "ORA-00942"
+    exit-code: 1
+
+  oracle0030:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1 "create table test1 (id number primary key, note varchar2(100))"
+    stdout: '"command_tag": "CREATE"'
+
+  oracle0031:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1 "insert into test1 (id, note) values (1, 'base')"
+    stdout: '"rows_affected": 1'
+
+  oracle0032: # deferred table grant is not applied until the binding is updated
+    command: ${OPENRUN_BIN} binding run-command /apps/or1partialread "select count(*) as n from test1"
+    stderr: "ORA-00942"
+    exit-code: 1
+
+  oracle0033:
+    command: ${OPENRUN_BIN} binding update --promote /apps/or1partialread
+    stdout: "Binding /apps/or1partialread updated"
+
+  oracle0034: # logon trigger sets current_schema, so unqualified names resolve in the base schema
+    command: ${OPENRUN_BIN} binding run-command /apps/or1partialread "select count(*) as n from test1" | jq -r '.rows[0].N'
+    stdout: "1"
+
+  oracle0035: # prod table is not visible through the staging schema
+    command: ${OPENRUN_BIN} binding run-command --staging /apps/or1 "select count(*) as n from test1"
+    stderr: "ORA-00942"
+    exit-code: 1
+
+  oracle0040:
+    command: ${OPENRUN_BIN} binding create --grant "read:*" /apps/or1 /apps/or1read
+    stdout: "Binding /apps/or1read created"
+
+  oracle0041:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1read "select count(*) as n from test1" | jq -r '.rows[0].N'
+    stdout: "1"
+
+  oracle0042: # read grant cannot insert into base tables
+    command: ${OPENRUN_BIN} binding run-command /apps/or1read "insert into test1 (id, note) values (2, 'read')"
+    stderr: "privilege"
+    exit-code: 1
+
+  oracle0043: # read grant cannot create tables
+    command: ${OPENRUN_BIN} binding run-command /apps/or1read "create table read_created (id number)"
+    stderr: "ORA-01031"
+    exit-code: 1
+
+  oracle0044: # read:* covers only tables existing at grant time
+    command: ${OPENRUN_BIN} binding run-command /apps/or1 "create table test2 (id number primary key, note varchar2(100))"
+    stdout: '"command_tag": "CREATE"'
+
+  oracle0045:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1 "insert into test2 (id, note) values (1, 'future')"
+    stdout: '"rows_affected": 1'
+
+  oracle0046: # new table is not covered until the binding is reapplied
+    command: ${OPENRUN_BIN} binding run-command /apps/or1read "select count(*) as n from test2"
+    stderr: "ORA-00942"
+    exit-code: 1
+
+  oracle0046a:
+    command: ${OPENRUN_BIN} binding update --reapply-all --promote /apps/or1read
+    stdout: "Binding /apps/or1read updated"
+
+  oracle0046b: # reapply-all extends the * grant to tables created after the grant
+    command: ${OPENRUN_BIN} binding run-command /apps/or1read "select count(*) as n from test2" | jq -r '.rows[0].N'
+    stdout: "1"
+
+  oracle0047: # read:* still cannot write
+    command: ${OPENRUN_BIN} binding run-command /apps/or1read "insert into test2 (id, note) values (2, 'read')"
+    stderr: "privilege"
+    exit-code: 1
+
+  oracle0048: # table-specific read does not leak to other tables
+    command: ${OPENRUN_BIN} binding run-command /apps/or1partialread "select count(*) as n from test2"
+    stderr: "ORA-00942"
+    exit-code: 1
+
+  oracle0049: # query keyword followed by a newline is still treated as a query
+    command: "${OPENRUN_BIN} binding run-command /apps/or1read \"select\ncount(*) as n from test1\" | jq -r '.rows[0].N'"
+    stdout: "1"
+
+  oracle0050: # table created with a quoted mixed-case name
+    command: ${OPENRUN_BIN} binding run-command /apps/or1 'create table "MixedCase" (id number primary key)'
+    stdout: '"command_tag": "CREATE"'
+
+  oracle0050a: # grant target matches the quoted name exactly, without uppercasing
+    command: ${OPENRUN_BIN} binding create --grant "read:MixedCase" /apps/or1 /apps/or1mixed
+    stdout: "Binding /apps/or1mixed created"
+
+  oracle0050b:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1mixed 'select count(*) as n from "MixedCase"' | jq -r '.rows[0].N'
+    stdout: "0"
+
+  oracle0054: # grant updates apply to staging before production
+    command: ${OPENRUN_BIN} binding run-command --staging /apps/or1 "create table stg_only (id number primary key)"
+    stdout: '"command_tag": "CREATE"'
+
+  oracle0055:
+    command: ${OPENRUN_BIN} binding run-command --staging /apps/or1 "insert into stg_only (id) values (1)"
+    stdout: '"rows_affected": 1'
+
+  oracle0056:
+    command: ${OPENRUN_BIN} binding create /apps/or1 /apps/or1stage
+    stdout: "Binding /apps/or1stage created"
+
+  oracle0057:
+    command: ${OPENRUN_BIN} binding run-command --staging /apps/or1stage "select count(*) as n from stg_only"
+    stderr: "ORA-00942"
+    exit-code: 1
+
+  oracle0058:
+    command: ${OPENRUN_BIN} binding update --add-grant "read:*" /apps/or1stage
+    stdout: "Binding /apps/or1stage updated"
+
+  oracle0059:
+    command: ${OPENRUN_BIN} binding run-command --staging /apps/or1stage "select count(*) as n from stg_only" | jq -r '.rows[0].N'
+    stdout: "1"
+
+  oracle0059a: # prod remains unchanged until promote
+    command: ${OPENRUN_BIN} binding run-command /apps/or1stage "select count(*) as n from test1"
+    stderr: "ORA-00942"
+    exit-code: 1
+
+  oracle0059b:
+    command: ${OPENRUN_BIN} binding update --promote /apps/or1stage
+    stdout: "Binding /apps/or1stage updated"
+
+  oracle0059c:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1stage "select count(*) as n from test1" | jq -r '.rows[0].N'
+    stdout: "1"
+
+  oracle0059d: # delete-grant revokes staged access before prod
+    command: ${OPENRUN_BIN} binding update --delete-grant "read:*" /apps/or1stage
+    stdout: "Binding /apps/or1stage updated"
+
+  oracle0059e:
+    command: ${OPENRUN_BIN} binding run-command --staging /apps/or1stage "select count(*) as n from stg_only"
+    stderr: "ORA-00942"
+    exit-code: 1
+
+  oracle0059f: # prod grant remains until promote
+    command: ${OPENRUN_BIN} binding run-command /apps/or1stage "select count(*) as n from test1" | jq -r '.rows[0].N'
+    stdout: "1"
+
+  oracle0059g:
+    command: ${OPENRUN_BIN} binding update --promote /apps/or1stage
+    stdout: "Binding /apps/or1stage updated"
+
+  oracle0059h:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1stage "select count(*) as n from test1"
+    stderr: "ORA-00942"
+    exit-code: 1
+
+  oracle0060:
+    command: ${OPENRUN_BIN} binding create --grant "full:*" /apps/or1 /apps/or1full
+    stdout: "Binding /apps/or1full created"
+
+  oracle0061:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1full "select count(*) as n from test1" | jq -r '.rows[0].N'
+    stdout: "1"
+
+  oracle0062:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1full "insert into test1 (id, note) values (4, 'full')"
+    stdout: '"rows_affected": 1'
+
+  oracle0063: # full does not include create in oracle (no scoped create privilege)
+    command: ${OPENRUN_BIN} binding run-command /apps/or1full "create table full_created (id number)"
+    stderr: "ORA-01031"
+    exit-code: 1
+
+  oracle0064:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1 "select count(*) as n from test1" | jq -r '.rows[0].N'
+    stdout: "2"
+
+  oracle0065: # sequences are covered by full:* after a reapply
+    command: ${OPENRUN_BIN} binding run-command /apps/or1 "create sequence seq1"
+    stdout: '"command_tag": "CREATE"'
+
+  oracle0065a: # sequence created after the grant is not covered yet
+    command: ${OPENRUN_BIN} binding run-command /apps/or1full "select seq1.nextval as n from dual"
+    stderr: "does not exist"
+    exit-code: 1
+
+  oracle0065b:
+    command: ${OPENRUN_BIN} binding update --reapply-all --promote /apps/or1full
+    stdout: "Binding /apps/or1full updated"
+
+  oracle0065c:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1full "select seq1.nextval as n from dual" | jq -r '.rows[0].N'
+    stdout: "1"
+
+  oracle0066: # full:* covers only tables existing at grant time
+    command: ${OPENRUN_BIN} binding run-command /apps/or1 "create table test3 (id number primary key, note varchar2(100))"
+    stdout: '"command_tag": "CREATE"'
+
+  oracle0066a:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1 "insert into test3 (id, note) values (1, 'future full')"
+    stdout: '"rows_affected": 1'
+
+  oracle0066b:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1full "select count(*) as n from test3"
+    stderr: "ORA-00942"
+    exit-code: 1
+
+  oracle0066c:
+    command: ${OPENRUN_BIN} binding update --reapply-all --promote /apps/or1full
+    stdout: "Binding /apps/or1full updated"
+
+  oracle0066d:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1full "select count(*) as n from test3" | jq -r '.rows[0].N'
+    stdout: "1"
+
+  oracle0066e:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1full "insert into test3 (id, note) values (2, 'full write')"
+    stdout: '"rows_affected": 1'
+
+  oracle0068: # full grant can target one specific table
+    command: ${OPENRUN_BIN} binding create --grant "full:test1" /apps/or1 /apps/or1fulltest1
+    stdout: "Binding /apps/or1fulltest1 created"
+
+  oracle0068a:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1fulltest1 "select count(*) as n from test1" | jq -r '.rows[0].N'
+    stdout: "2"
+
+  oracle0068b:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1fulltest1 "insert into test1 (id, note) values (5, 'full table')"
+    stdout: '"rows_affected": 1'
+
+  oracle0068c: # table-specific full grant does not include other tables
+    command: ${OPENRUN_BIN} binding run-command /apps/or1fulltest1 "select count(*) as n from test2"
+    stderr: "ORA-00942"
+    exit-code: 1
+
+  oracle0068d: # table-specific full grant does not include create
+    command: ${OPENRUN_BIN} binding run-command /apps/or1fulltest1 "create table full_table_created (id number)"
+    stderr: "ORA-01031"
+    exit-code: 1
+
+  oracle0069: # multiple grants can be applied in one update
+    command: ${OPENRUN_BIN} binding create /apps/or1 /apps/or1multi
+    stdout: "Binding /apps/or1multi created"
+
+  oracle0069a:
+    command: ${OPENRUN_BIN} binding update --add-grant "read:test1" --add-grant "full:test2" --promote /apps/or1multi
+    stdout: "Binding /apps/or1multi updated"
+
+  oracle0069b:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1multi "select count(*) as n from test1" | jq -r '.rows[0].N'
+    stdout: "3"
+
+  oracle0069c:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1multi "insert into test2 (id, note) values (2, 'multi')"
+    stdout: '"rows_affected": 1'
+
+  oracle0069d:
+    command: ${OPENRUN_BIN} binding update --delete-grant "read:test1" --promote /apps/or1multi
+    stdout: "Binding /apps/or1multi updated"
+
+  oracle0069e: # deleted grant was revoked
+    command: ${OPENRUN_BIN} binding run-command /apps/or1multi "select count(*) as n from test1"
+    stderr: "ORA-00942"
+    exit-code: 1
+
+  oracle0069f: # untouched full:test2 grant remains
+    command: ${OPENRUN_BIN} binding run-command /apps/or1multi "select count(*) as n from test2" | jq -r '.rows[0].N'
+    stdout: "2"
+
+  oracle0069g: # the create grant type is also rejected on update
+    command: ${OPENRUN_BIN} binding update --add-grant "create:*" --promote /apps/or1multi
+    stderr: "unsupported grant type"
+    exit-code: 1
+
+  oracle0070: # revoke read:* from all granted tables
+    command: ${OPENRUN_BIN} binding update --delete-grant "read:*" --promote /apps/or1read
+    stdout: "Binding /apps/or1read updated"
+
+  oracle0071:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1read "select count(*) as n from test1"
+    stderr: "ORA-00942"
+    exit-code: 1
+
+  oracle0072:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1read "select count(*) as n from test2"
+    stderr: "ORA-00942"
+    exit-code: 1
+
+  oracle0090: # revoke full:* removes table read/write and sequence access
+    command: ${OPENRUN_BIN} binding update --delete-grant "full:*" --promote /apps/or1full
+    stdout: "Binding /apps/or1full updated"
+
+  oracle0091:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1full "insert into test1 (id, note) values (6, 'full revoked')"
+    stderr: "ORA-00942"
+    exit-code: 1
+
+  oracle0092:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1full "select count(*) as n from test1"
+    stderr: "ORA-00942"
+    exit-code: 1
+
+  oracle0093:
+    command: ${OPENRUN_BIN} binding run-command /apps/or1full "select seq1.nextval as n from dual"
+    stderr: "does not exist"
+    exit-code: 1
+
+  oracle9990: # uninstall is refused while services of the provider types exist
+    command: ${OPENRUN_BIN} provider uninstall oracle
+    stderr: "service(s) exist"
+    exit-code: 1
+
+  oracle9999:
+    command: (${OPENRUN_BIN} binding delete /apps/or1multi; ${OPENRUN_BIN} binding delete /apps/or1fulltest1; ${OPENRUN_BIN} binding delete /apps/or1full; ${OPENRUN_BIN} binding delete /apps/or1stage; ${OPENRUN_BIN} binding delete /apps/or1mixed; ${OPENRUN_BIN} binding delete /apps/or1read; ${OPENRUN_BIN} binding delete /apps/or1partialread; ${OPENRUN_BIN} binding delete /apps/or1; ${OPENRUN_BIN} service delete oracle/or1) || true
+
+  oracle9999a: # uninstall succeeds once the services are deleted
+    command: ${OPENRUN_BIN} provider uninstall oracle
+    stdout: "Provider oracle uninstalled"
+
+  oracle9999b: # the provider's service types are no longer available
+    command: ${OPENRUN_BIN} service create --config url=${TEST_ORACLE_URL} oracle/afteruninstall
+    stderr: "unknown service type"
+    exit-code: 1
+
+  oracle9999c: # provider list no longer includes the provider
+    command: ${OPENRUN_BIN} provider list -f json | jq -r '[.[] | select(.name=="oracle")] | length'
+    stdout: "0"
+
+  oracle9999d: # reinstall leaves a clean slate for reruns
+    command: ${OPENRUN_BIN} provider install oracle --source-url ${ORACLE_PROVIDER_BIN}
+    stdout: "Provider oracle dev installed"

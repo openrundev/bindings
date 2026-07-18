@@ -1,0 +1,5 @@
+*.tmp
+openrun-binding-*
+go.work
+go.work.sum
+tests/run/

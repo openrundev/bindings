@@ -1,0 +1,61 @@
+name: Test mongodb
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "mongodb/**"
+      - "tests/**"
+      - ".github/workflows/test-mongodb.yml"
+  pull_request:
+    paths:
+      - "mongodb/**"
+      - "tests/**"
+      - ".github/workflows/test-mongodb.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout openrun-bindings
+        uses: actions/checkout@v4
+        with:
+          path: openrun-bindings
+          persist-credentials: false
+
+      # The pkg/binding SDK module is resolved through a replace directive
+      # pointing at a sibling openrun checkout (until the SDK is tagged and
+      # published); the same checkout builds the server for integration tests.
+      - name: Checkout openrun
+        uses: actions/checkout@v4
+        with:
+          repository: openrundev/openrun
+          path: openrun7
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: openrun-bindings/mongodb/go.mod
+          cache-dependency-path: openrun-bindings/mongodb/go.sum
+
+      - name: Unit tests
+        working-directory: openrun-bindings/mongodb
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Install commander
+        run: go install github.com/commander-cli/commander/v2/cmd/commander@v2.5.0
+
+      - name: Integration tests (RPC layer)
+        working-directory: openrun-bindings
+        run: OPENRUN_SRC="$GITHUB_WORKSPACE/openrun7" ./tests/run_int_tests.sh mongodb

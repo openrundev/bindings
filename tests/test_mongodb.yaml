@@ -1,0 +1,269 @@
+config:
+  env:
+    CL_CONFIG_FILE: ${CL_CONFIG_FILE}
+    OPENRUN_BIN: ${OPENRUN_BIN}
+    MONGODB_PROVIDER_BIN: ${MONGODB_PROVIDER_BIN}
+    PATH: ${PATH}
+    MONGODB_TEST_CONTAINER_COMMAND: ${MONGODB_TEST_CONTAINER_COMMAND}
+    MONGODB_TEST_CONTAINER_ID: ${MONGODB_TEST_CONTAINER_ID}
+    TEST_MONGODB_URL: ${TEST_MONGODB_URL}
+
+tests:
+  mongodb0000a: # provider install from a local binary registers it in the DB (RPC layer from here on)
+    command: ${OPENRUN_BIN} provider install mongodb --source-url ${MONGODB_PROVIDER_BIN}
+    stdout: "Provider mongodb dev installed"
+    exit-code: 0
+
+  mongodb0000b: # provider list shows the served service types
+    command: ${OPENRUN_BIN} provider list -f json | jq -r '.[] | select(.name=="mongodb") | .service_types | join(",")'
+    stdout: "atlas,mongodb"
+
+  mongodb0000c: # install records the binary checksum for this platform
+    command: ${OPENRUN_BIN} provider list -f json | jq -r '.[] | select(.name=="mongodb") | .checksums | length'
+    stdout: "1"
+
+  mongodb0001:
+    command: ${OPENRUN_BIN} service create --config url=${TEST_MONGODB_URL} mongodb/m1
+    stdout: "Service mongodb/m1 created"
+    exit-code: 0
+
+  mongodb0010:
+    command: ${OPENRUN_BIN} binding create mongodb/m1 /apps/m1
+    stdout: "Binding /apps/m1 created"
+
+  mongodb0010a: # account url automatically maps localhost to a container hostname
+    command: ${OPENRUN_BIN} binding show-account /apps/m1 | jq -r '.url | startswith("mongodb://") and (contains("@host.docker.internal") or contains("@host.containers.internal"))'
+    stdout: "true"
+
+  mongodb0010b: # direct account url keeps the service hostname
+    command: ${OPENRUN_BIN} binding show-account /apps/m1 | jq -r '.url != .url_direct'
+    stdout: "true"
+
+  mongodb0010c: # prod account gets a dedicated prod database tied to the binding id
+    command: ${OPENRUN_BIN} binding show-account /apps/m1 | jq -r '.database | startswith("cl_prd_bnd_")'
+    stdout: "true"
+
+  mongodb0010d: # staging account gets a separate staging database
+    command: ${OPENRUN_BIN} binding show-account --staging /apps/m1 | jq -r '.database | startswith("cl_stg_bnd_")'
+    stdout: "true"
+
+  mongodb0010e: # binding users live in the admin database
+    command: ${OPENRUN_BIN} binding show-account /apps/m1 | jq -r '.url | contains("authSource=admin")'
+    stdout: "true"
+
+  mongodb0011: # prod and staging accounts use different users
+    command: bash -c 'prod=$(${OPENRUN_BIN} binding run-command /apps/m1 "{\"connectionStatus\":1}" | jq -r ".result.authInfo.authenticatedUsers[0].user"); stage=$(${OPENRUN_BIN} binding run-command --staging /apps/m1 "{\"connectionStatus\":1}" | jq -r ".result.authInfo.authenticatedUsers[0].user"); [[ "$prod" != "$stage" && "$prod" == cl_usr_prd_* && "$stage" == cl_usr_stg_* ]] && echo true'
+    stdout: "true"
+
+  mongodb0020: # base account can write to its own database
+    command: ${OPENRUN_BIN} binding run-command /apps/m1 '{"insert":"t1","documents":[{"k":"v1"}]}' | jq -r '.result.n'
+    stdout: "1"
+
+  mongodb0021:
+    command: ${OPENRUN_BIN} binding run-command /apps/m1 '{"find":"t1"}' | jq -r '.result.cursor.firstBatch[0].k'
+    stdout: "v1"
+
+  mongodb0022: # user administration is denied for binding accounts
+    command: ${OPENRUN_BIN} binding run-command /apps/m1 '{"usersInfo":1}'
+    stderr: "not authorized"
+    exit-code: 1
+
+  mongodb0023: # user administration on its own database is denied too
+    command: ${OPENRUN_BIN} binding run-command /apps/m1 '{"createUser":"hacker","pwd":"pw","roles":[]}'
+    stderr: "not authorized"
+    exit-code: 1
+
+  mongodb0029: # prod collections are not visible to the staging account (separate database)
+    command: ${OPENRUN_BIN} binding run-command --staging /apps/m1 '{"find":"t1"}' | jq -r '.result.cursor.firstBatch | length'
+    stdout: "0"
+
+  mongodb0030:
+    command: ${OPENRUN_BIN} binding create /apps/m1 /apps/m1none
+    stdout: "Binding /apps/m1none created"
+
+  mongodb0031: # derived binding with no grants cannot access any collection
+    command: ${OPENRUN_BIN} binding run-command /apps/m1none '{"find":"t1"}'
+    stderr: "not authorized"
+    exit-code: 1
+
+  mongodb0040:
+    command: ${OPENRUN_BIN} binding create --grant "read:*" /apps/m1 /apps/m1read
+    stdout: "Binding /apps/m1read created"
+
+  mongodb0041: # read grant can read base collections
+    command: ${OPENRUN_BIN} binding run-command /apps/m1read '{"find":"t1"}' | jq -r '.result.cursor.firstBatch[0].k'
+    stdout: "v1"
+
+  mongodb0042: # read grant cannot write, enforced by the server
+    command: ${OPENRUN_BIN} binding run-command /apps/m1read '{"insert":"t1","documents":[{"k":"v2"}]}'
+    stderr: "not authorized"
+    exit-code: 1
+
+  mongodb0050: # targeted grants scope access to one collection (exact name, not a prefix)
+    command: ${OPENRUN_BIN} binding create --grant "read:t1" /apps/m1 /apps/m1t1
+    stdout: "Binding /apps/m1t1 created"
+
+  mongodb0051:
+    command: ${OPENRUN_BIN} binding run-command /apps/m1t1 '{"find":"t1"}' | jq -r '.result.cursor.firstBatch[0].k'
+    stdout: "v1"
+
+  mongodb0052: # targeted grant does not leak to other collections
+    command: ${OPENRUN_BIN} binding run-command /apps/m1t1 '{"find":"t2"}'
+    stderr: "not authorized"
+    exit-code: 1
+
+  mongodb0055: # create grants are not supported for mongodb
+    command: ${OPENRUN_BIN} binding create --grant "create:*" /apps/m1 /apps/m1create
+    stderr: "unsupported grant type"
+    exit-code: 1
+
+  mongodb0056: # unsafe characters in grant targets are rejected
+    command: ${OPENRUN_BIN} binding create --grant 'read:a$b' /apps/m1 /apps/m1bad
+    stderr: "invalid grant target"
+    exit-code: 1
+
+  mongodb0057: # system collections cannot be granted
+    command: ${OPENRUN_BIN} binding create --grant "read:system.users" /apps/m1 /apps/m1sys
+    stderr: "system collections cannot be granted"
+    exit-code: 1
+
+  mongodb0060:
+    command: ${OPENRUN_BIN} binding create --grant "full:*" /apps/m1 /apps/m1full
+    stdout: "Binding /apps/m1full created"
+
+  mongodb0061:
+    command: ${OPENRUN_BIN} binding run-command /apps/m1full '{"insert":"t3","documents":[{"k":"fv1"}]}' | jq -r '.result.n'
+    stdout: "1"
+
+  mongodb0062:
+    command: ${OPENRUN_BIN} binding run-command /apps/m1full '{"find":"t1"}' | jq -r '.result.cursor.firstBatch[0].k'
+    stdout: "v1"
+
+  mongodb0063: # full grant is still limited to the binding database
+    command: ${OPENRUN_BIN} binding run-command /apps/m1full '{"usersInfo":1}'
+    stderr: "not authorized"
+    exit-code: 1
+
+  mongodb0064: # full grant on one collection cannot write other collections
+    command: ${OPENRUN_BIN} binding create --grant "full:t2" /apps/m1 /apps/m1t2
+    stdout: "Binding /apps/m1t2 created"
+
+  mongodb0065:
+    command: ${OPENRUN_BIN} binding run-command /apps/m1t2 '{"insert":"t2","documents":[{"k":"tv1"}]}' | jq -r '.result.n'
+    stdout: "1"
+
+  mongodb0066:
+    command: ${OPENRUN_BIN} binding run-command /apps/m1t2 '{"insert":"t1","documents":[{"k":"tv2"}]}'
+    stderr: "not authorized"
+    exit-code: 1
+
+  mongodb0070: # grant updates apply to staging before production
+    command: ${OPENRUN_BIN} binding create /apps/m1 /apps/m1stage
+    stdout: "Binding /apps/m1stage created"
+
+  mongodb0071: # seed a staging document using the base staging account
+    command: ${OPENRUN_BIN} binding run-command --staging /apps/m1 '{"insert":"t1","documents":[{"k":"sv1"}]}' | jq -r '.result.n'
+    stdout: "1"
+
+  mongodb0072:
+    command: ${OPENRUN_BIN} binding run-command --staging /apps/m1stage '{"find":"t1"}'
+    stderr: "not authorized"
+    exit-code: 1
+
+  mongodb0073:
+    command: ${OPENRUN_BIN} binding update --add-grant "read:*" /apps/m1stage
+    stdout: "Binding /apps/m1stage updated"
+
+  mongodb0074:
+    command: ${OPENRUN_BIN} binding run-command --staging /apps/m1stage '{"find":"t1"}' | jq -r '.result.cursor.firstBatch[0].k'
+    stdout: "sv1"
+
+  mongodb0075: # prod remains unchanged until promote
+    command: ${OPENRUN_BIN} binding run-command /apps/m1stage '{"find":"t1"}'
+    stderr: "not authorized"
+    exit-code: 1
+
+  mongodb0076:
+    command: ${OPENRUN_BIN} binding update --promote /apps/m1stage
+    stdout: "Binding /apps/m1stage updated"
+
+  mongodb0077:
+    command: ${OPENRUN_BIN} binding run-command /apps/m1stage '{"find":"t1"}' | jq -r '.result.cursor.firstBatch[0].k'
+    stdout: "v1"
+
+  mongodb0078: # delete-grant revokes staged access before prod
+    command: ${OPENRUN_BIN} binding update --delete-grant "read:*" /apps/m1stage
+    stdout: "Binding /apps/m1stage updated"
+
+  mongodb0079:
+    command: ${OPENRUN_BIN} binding run-command --staging /apps/m1stage '{"find":"t1"}'
+    stderr: "not authorized"
+    exit-code: 1
+
+  mongodb0079a: # prod grant remains until promote
+    command: ${OPENRUN_BIN} binding run-command /apps/m1stage '{"find":"t1"}' | jq -r '.result.cursor.firstBatch[0].k'
+    stdout: "v1"
+
+  mongodb0079b:
+    command: ${OPENRUN_BIN} binding update --promote /apps/m1stage
+    stdout: "Binding /apps/m1stage updated"
+
+  mongodb0079c:
+    command: ${OPENRUN_BIN} binding run-command /apps/m1stage '{"find":"t1"}'
+    stderr: "not authorized"
+    exit-code: 1
+
+  mongodb0080: # simulate the binding user and role being dropped out-of-band
+    command: "u=$(${OPENRUN_BIN} binding show-account /apps/m1read | jq -r .username); $MONGODB_TEST_CONTAINER_COMMAND exec $MONGODB_TEST_CONTAINER_ID mongosh -u root -p mongo --quiet admin --eval \"db.dropUser('$u'); db.dropRole('$u')\""
+    stdout: "ok: 1"
+
+  mongodb0081:
+    command: ${OPENRUN_BIN} binding run-command /apps/m1read '{"find":"t1"}'
+    stderr: "auth error"
+    exit-code: 1
+
+  mongodb0082: # reapply-all recreates the user and role with the recorded grants
+    command: ${OPENRUN_BIN} binding update --reapply-all --promote /apps/m1read
+    stdout: "Binding /apps/m1read updated"
+
+  mongodb0083:
+    command: ${OPENRUN_BIN} binding run-command /apps/m1read '{"find":"t1"}' | jq -r '.result.cursor.firstBatch[0].k'
+    stdout: "v1"
+
+  mongodb0084: # narrow read:* to read:t1 in one update; overlapping revoke keeps the target readable
+    command: ${OPENRUN_BIN} binding update --delete-grant "read:*" --add-grant "read:t1" --promote /apps/m1read
+    stdout: "Binding /apps/m1read updated"
+
+  mongodb0085:
+    command: ${OPENRUN_BIN} binding run-command /apps/m1read '{"find":"t1"}' | jq -r '.result.cursor.firstBatch[0].k'
+    stdout: "v1"
+
+  mongodb0086: # the revoked wildcard grant no longer covers other collections
+    command: ${OPENRUN_BIN} binding run-command /apps/m1read '{"find":"t3"}'
+    stderr: "not authorized"
+    exit-code: 1
+
+  mongodb9990: # uninstall is refused while services of the provider types exist
+    command: ${OPENRUN_BIN} provider uninstall mongodb
+    stderr: "service(s) exist"
+    exit-code: 1
+
+  mongodb9999:
+    command: (${OPENRUN_BIN} binding delete /apps/m1stage; ${OPENRUN_BIN} binding delete /apps/m1t2; ${OPENRUN_BIN} binding delete /apps/m1full; ${OPENRUN_BIN} binding delete /apps/m1t1; ${OPENRUN_BIN} binding delete /apps/m1read; ${OPENRUN_BIN} binding delete /apps/m1none; ${OPENRUN_BIN} binding delete /apps/m1; ${OPENRUN_BIN} service delete mongodb/m1) || true
+
+  mongodb9999a: # uninstall succeeds once the services are deleted
+    command: ${OPENRUN_BIN} provider uninstall mongodb
+    stdout: "Provider mongodb uninstalled"
+
+  mongodb9999b: # the provider's service types are no longer available
+    command: ${OPENRUN_BIN} service create --config url=${TEST_MONGODB_URL} mongodb/afteruninstall
+    stderr: "unknown service type"
+    exit-code: 1
+
+  mongodb9999c: # provider list no longer includes the provider
+    command: ${OPENRUN_BIN} provider list -f json | jq -r '[.[] | select(.name=="mongodb")] | length'
+    stdout: "0"
+
+  mongodb9999d: # reinstall leaves a clean slate for reruns
+    command: ${OPENRUN_BIN} provider install mongodb --source-url ${MONGODB_PROVIDER_BIN}
+    stdout: "Provider mongodb dev installed"

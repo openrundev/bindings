@@ -1,0 +1,78 @@
+name: Release
+
+# Releases one provider when its tag is pushed. Tags are of the form
+# <provider>/vX.Y.Z, e.g.:
+#   git tag mongodb/v0.1.0 && git push origin mongodb/v0.1.0
+# The release contains per-platform binaries named
+# openrun-binding-<provider>-<os>-<arch>[.exe] plus a SHA256SUMS file, matching
+# the `openrun provider install` source-url template:
+#   https://github.com/openrundev/openrun-bindings/releases/download/<provider>%2F{version}/openrun-binding-<provider>-{os}-{arch}
+on:
+  push:
+    tags:
+      - "mongodb/v*"
+      - "redis/v*"
+      - "sqlserver/v*"
+      - "oracle/v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout openrun-bindings
+        uses: actions/checkout@v4
+        with:
+          path: openrun-bindings
+          persist-credentials: false
+
+      # Needed for the pkg/binding replace directive until the SDK is published
+      - name: Checkout openrun
+        uses: actions/checkout@v4
+        with:
+          repository: openrundev/openrun
+          path: openrun7
+          persist-credentials: false
+
+      - name: Parse tag
+        id: tag
+        run: |
+          PROVIDER="${GITHUB_REF_NAME%%/*}"
+          VERSION="${GITHUB_REF_NAME#*/}"
+          echo "provider=$PROVIDER" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: openrun-bindings/${{ steps.tag.outputs.provider }}/go.mod
+          cache-dependency-path: openrun-bindings/${{ steps.tag.outputs.provider }}/go.sum
+
+      - name: Unit tests
+        working-directory: openrun-bindings/${{ steps.tag.outputs.provider }}
+        run: go test ./...
+
+      - name: Build release binaries
+        working-directory: openrun-bindings/${{ steps.tag.outputs.provider }}
+        env:
+          PROVIDER: ${{ steps.tag.outputs.provider }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          mkdir -p ../dist
+          for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            export GOOS="${platform%/*}" GOARCH="${platform#*/}"
+            out="../dist/openrun-binding-${PROVIDER}-${GOOS}-${GOARCH}"
+            if [[ "$GOOS" == "windows" ]]; then out="${out}.exe"; fi
+            echo "Building $out"
+            CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "$out" .
+          done
+          cd ../dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "${{ steps.tag.outputs.provider }} ${{ steps.tag.outputs.version }}"
+          files: |
+            openrun-bindings/dist/*

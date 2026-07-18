@@ -1,0 +1,383 @@
+config:
+  env:
+    CL_CONFIG_FILE: ${CL_CONFIG_FILE}
+    OPENRUN_BIN: ${OPENRUN_BIN}
+    SQLSERVER_PROVIDER_BIN: ${SQLSERVER_PROVIDER_BIN}
+    PATH: ${PATH}
+    SQLSERVER_TEST_CONTAINER_COMMAND: ${SQLSERVER_TEST_CONTAINER_COMMAND}
+    SQLSERVER_TEST_CONTAINER_ID: ${SQLSERVER_TEST_CONTAINER_ID}
+    TEST_SQLSERVER_PASSWORD: ${TEST_SQLSERVER_PASSWORD}
+    TEST_SQLSERVER_URL: ${TEST_SQLSERVER_URL}
+
+tests:
+  sqlserver0000a: # provider install from a local binary registers it in the DB (RPC layer from here on)
+    command: ${OPENRUN_BIN} provider install sqlserver --source-url ${SQLSERVER_PROVIDER_BIN}
+    stdout: "Provider sqlserver dev installed"
+    exit-code: 0
+
+  sqlserver0000b: # provider list shows the served service types
+    command: ${OPENRUN_BIN} provider list -f json | jq -r '.[] | select(.name=="sqlserver") | .service_types | join(",")'
+    stdout: "sqlserver"
+
+  sqlserver0000c: # install records the binary checksum for this platform
+    command: ${OPENRUN_BIN} provider list -f json | jq -r '.[] | select(.name=="sqlserver") | .checksums | length'
+    stdout: "1"
+
+  sqlserver0001:
+    command: ${OPENRUN_BIN} service create --config url=${TEST_SQLSERVER_URL} sqlserver/ss1
+    stdout: "Service sqlserver/ss1 created"
+    exit-code: 0
+
+  sqlserver0010:
+    command: ${OPENRUN_BIN} binding create sqlserver/ss1 /apps/ss1
+    stdout: "Binding /apps/ss1 created"
+    exit-code: 0
+
+  sqlserver0010a: # account url automatically maps localhost to a container hostname
+    command: ${OPENRUN_BIN} binding show-account /apps/ss1 | jq -r '.url | startswith("sqlserver://") and (contains("@host.docker.internal") or contains("@host.containers.internal"))'
+    stdout: "true"
+
+  sqlserver0010b: # direct account url keeps the service hostname
+    command: ${OPENRUN_BIN} binding show-account /apps/ss1 | jq -r '.url != .url_direct'
+    stdout: "true"
+
+  sqlserver0011: # prod and staging accounts use different schemas
+    command: bash -c 'prod=$(${OPENRUN_BIN} binding run-command /apps/ss1 "select schema_name() as sch" | jq -r ".rows[0].sch"); stage=$(${OPENRUN_BIN} binding run-command --staging /apps/ss1 "select schema_name() as sch" | jq -r ".rows[0].sch"); [[ "$prod" != "$stage" ]] && echo true'
+    stdout: "true"
+
+  sqlserver0020: # table-specific grant can be created before the table exists
+    command: ${OPENRUN_BIN} binding create --grant "read:test1" /apps/ss1 /apps/ss1partialread
+    stdout: "Binding /apps/ss1partialread created"
+
+  sqlserver0021: # before creation, the target table is absent
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1partialread "select count(*) as n from test1"
+    stderr: "Invalid object name"
+    exit-code: 1
+
+  sqlserver0030:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1 "create table test1 (id int primary key, note varchar(100))"
+    stdout: '"command_tag": "CREATE"'
+
+  sqlserver0031:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1 "insert into test1 (id, note) values (1, 'base')"
+    stdout: '"rows_affected": 1'
+
+  sqlserver0032: # deferred table grant is not applied until the binding is updated
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1partialread "select count(*) as n from test1"
+    stderr: "SELECT permission was denied"
+    exit-code: 1
+
+  sqlserver0033:
+    command: ${OPENRUN_BIN} binding update --promote /apps/ss1partialread
+    stdout: "Binding /apps/ss1partialread updated"
+
+  sqlserver0034:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1partialread "select count(*) as n from test1" | jq -r '.rows[0].n'
+    stdout: "1"
+
+  sqlserver0035: # prod table is not visible through the staging schema
+    command: ${OPENRUN_BIN} binding run-command --staging /apps/ss1 "select count(*) as n from test1"
+    stderr: "Invalid object name"
+    exit-code: 1
+
+  sqlserver0040:
+    command: ${OPENRUN_BIN} binding create --grant "read:*" /apps/ss1 /apps/ss1read
+    stdout: "Binding /apps/ss1read created"
+
+  sqlserver0041:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1read "select count(*) as n from test1" | jq -r '.rows[0].n'
+    stdout: "1"
+
+  sqlserver0041a: # query keyword followed by a newline is still treated as a query
+    command: "${OPENRUN_BIN} binding run-command /apps/ss1read \"select\ncount(*) as n from test1\" | jq -r '.rows[0].n'"
+    stdout: "1"
+
+  sqlserver0042: # read grant cannot insert into base tables
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1read "insert into test1 (id, note) values (2, 'read')"
+    stderr: "INSERT permission was denied"
+    exit-code: 1
+
+  sqlserver0043: # read grant cannot create tables
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1read "create table read_created (id int)"
+    stderr: "CREATE TABLE permission denied"
+    exit-code: 1
+
+  sqlserver0044: # schema-level read:* covers tables created after the grant
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1 "create table test2 (id int primary key, note varchar(100))"
+    stdout: '"command_tag": "CREATE"'
+
+  sqlserver0045:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1 "insert into test2 (id, note) values (1, 'future')"
+    stdout: '"rows_affected": 1'
+
+  sqlserver0046:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1read "select count(*) as n from test2" | jq -r '.rows[0].n'
+    stdout: "1"
+
+  sqlserver0046a: # simulate an already-recorded grant missing from the database
+    command: "bash -c 'acct=$(${OPENRUN_BIN} binding show-account /apps/ss1read); sch=$(jq -r \".schema\" <<<\"$acct\"); usr=$(jq -r \".user\" <<<\"$acct\"); stmt=\"REVOKE SELECT ON SCHEMA::[$sch] FROM [$usr]\"; \"$SQLSERVER_TEST_CONTAINER_COMMAND\" exec \"$SQLSERVER_TEST_CONTAINER_ID\" /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$TEST_SQLSERVER_PASSWORD\" -d openrun_cli -Q \"$stmt\" 2>/dev/null || \"$SQLSERVER_TEST_CONTAINER_COMMAND\" exec \"$SQLSERVER_TEST_CONTAINER_ID\" /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P \"$TEST_SQLSERVER_PASSWORD\" -d openrun_cli -Q \"$stmt\"; echo REVOKE'"
+    stdout: "REVOKE"
+
+  sqlserver0046b:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1read "select count(*) as n from test2"
+    stderr: "SELECT permission was denied"
+    exit-code: 1
+
+  sqlserver0046c:
+    command: ${OPENRUN_BIN} binding update --reapply-all --promote /apps/ss1read
+    stdout: "Binding /apps/ss1read updated"
+
+  sqlserver0046d: # reapply-all restores grants that were already marked applied
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1read "select count(*) as n from test2" | jq -r '.rows[0].n'
+    stdout: "1"
+
+  sqlserver0047: # read:* still cannot write to future tables
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1read "insert into test2 (id, note) values (2, 'read')"
+    stderr: "INSERT permission was denied"
+    exit-code: 1
+
+  sqlserver0048: # table-specific read does not leak to other tables
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1partialread "select count(*) as n from test2"
+    stderr: "SELECT permission was denied"
+    exit-code: 1
+
+  sqlserver0050:
+    command: ${OPENRUN_BIN} binding create --grant "create:*" /apps/ss1 /apps/ss1create
+    stdout: "Binding /apps/ss1create created"
+
+  sqlserver0051:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1create "create table create_created (id int)"
+    stdout: '"command_tag": "CREATE"'
+
+  sqlserver0052: # create grant does not include read on base tables
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1create "select count(*) as n from test1"
+    stderr: "SELECT permission was denied"
+    exit-code: 1
+
+  sqlserver0053: # create grant does not include write on base tables
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1create "insert into test1 (id, note) values (3, 'create')"
+    stderr: "INSERT permission was denied"
+    exit-code: 1
+
+  sqlserver0054: # grant updates apply to staging before production
+    command: ${OPENRUN_BIN} binding run-command --staging /apps/ss1 "create table stg_only (id int primary key)"
+    stdout: '"command_tag": "CREATE"'
+
+  sqlserver0055:
+    command: ${OPENRUN_BIN} binding run-command --staging /apps/ss1 "insert into stg_only (id) values (1)"
+    stdout: '"rows_affected": 1'
+
+  sqlserver0056:
+    command: ${OPENRUN_BIN} binding create /apps/ss1 /apps/ss1stage
+    stdout: "Binding /apps/ss1stage created"
+
+  sqlserver0057:
+    command: ${OPENRUN_BIN} binding run-command --staging /apps/ss1stage "select count(*) as n from stg_only"
+    stderr: "SELECT permission was denied"
+    exit-code: 1
+
+  sqlserver0058:
+    command: ${OPENRUN_BIN} binding update --add-grant "read:*" /apps/ss1stage
+    stdout: "Binding /apps/ss1stage updated"
+
+  sqlserver0059:
+    command: ${OPENRUN_BIN} binding run-command --staging /apps/ss1stage "select count(*) as n from stg_only" | jq -r '.rows[0].n'
+    stdout: "1"
+
+  sqlserver0059a: # prod remains unchanged until promote
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1stage "select count(*) as n from test1"
+    stderr: "SELECT permission was denied"
+    exit-code: 1
+
+  sqlserver0059b:
+    command: ${OPENRUN_BIN} binding update --promote /apps/ss1stage
+    stdout: "Binding /apps/ss1stage updated"
+
+  sqlserver0059c:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1stage "select count(*) as n from test1" | jq -r '.rows[0].n'
+    stdout: "1"
+
+  sqlserver0059d: # delete-grant revokes staged access before prod
+    command: ${OPENRUN_BIN} binding update --delete-grant "read:*" /apps/ss1stage
+    stdout: "Binding /apps/ss1stage updated"
+
+  sqlserver0059e:
+    command: ${OPENRUN_BIN} binding run-command --staging /apps/ss1stage "select count(*) as n from stg_only"
+    stderr: "SELECT permission was denied"
+    exit-code: 1
+
+  sqlserver0059f: # prod grant remains until promote
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1stage "select count(*) as n from test1" | jq -r '.rows[0].n'
+    stdout: "1"
+
+  sqlserver0059g:
+    command: ${OPENRUN_BIN} binding update --promote /apps/ss1stage
+    stdout: "Binding /apps/ss1stage updated"
+
+  sqlserver0059h:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1stage "select count(*) as n from test1"
+    stderr: "SELECT permission was denied"
+    exit-code: 1
+
+  sqlserver0060:
+    command: ${OPENRUN_BIN} binding create --grant "full:*" /apps/ss1 /apps/ss1full
+    stdout: "Binding /apps/ss1full created"
+
+  sqlserver0061:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1full "select count(*) as n from test1" | jq -r '.rows[0].n'
+    stdout: "1"
+
+  sqlserver0062:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1full "insert into test1 (id, note) values (4, 'full')"
+    stdout: '"rows_affected": 1'
+
+  sqlserver0063:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1full "create table full_created (id int)"
+    stdout: '"command_tag": "CREATE"'
+
+  sqlserver0064:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1 "select count(*) as n from test1" | jq -r '.rows[0].n'
+    stdout: "2"
+
+  sqlserver0065: # schema-level full:* covers future tables and identity columns
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1 "create table test3 (id int identity primary key, note varchar(100))"
+    stdout: '"command_tag": "CREATE"'
+
+  sqlserver0066:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1full "insert into test3 (note) values ('future full')"
+    stdout: '"rows_affected": 1'
+
+  sqlserver0067:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1full "select count(*) as n from test3" | jq -r '.rows[0].n'
+    stdout: "1"
+
+  sqlserver0068: # full grant can target one specific table
+    command: ${OPENRUN_BIN} binding create --grant "full:test1" /apps/ss1 /apps/ss1fulltest1
+    stdout: "Binding /apps/ss1fulltest1 created"
+
+  sqlserver0068a:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1fulltest1 "select count(*) as n from test1" | jq -r '.rows[0].n'
+    stdout: "2"
+
+  sqlserver0068b:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1fulltest1 "insert into test1 (id, note) values (5, 'full table')"
+    stdout: '"rows_affected": 1'
+
+  sqlserver0068c: # table-specific full grant does not include other tables
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1fulltest1 "select count(*) as n from test2"
+    stderr: "SELECT permission was denied"
+    exit-code: 1
+
+  sqlserver0068d: # table-specific full grant does not include schema create
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1fulltest1 "create table full_table_created (id int)"
+    stderr: "CREATE TABLE permission denied"
+    exit-code: 1
+
+  sqlserver0069: # multiple grants can be applied in one update
+    command: ${OPENRUN_BIN} binding create /apps/ss1 /apps/ss1multi
+    stdout: "Binding /apps/ss1multi created"
+
+  sqlserver0069a:
+    command: ${OPENRUN_BIN} binding update --add-grant "read:test1" --add-grant "create:*" --promote /apps/ss1multi
+    stdout: "Binding /apps/ss1multi updated"
+
+  sqlserver0069b:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1multi "select count(*) as n from test1" | jq -r '.rows[0].n'
+    stdout: "3"
+
+  sqlserver0069c:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1multi "create table multi_created (id int)"
+    stdout: '"command_tag": "CREATE"'
+
+  sqlserver0069d:
+    command: ${OPENRUN_BIN} binding update --delete-grant "read:test1" --add-grant "read:test2" --promote /apps/ss1multi
+    stdout: "Binding /apps/ss1multi updated"
+
+  sqlserver0069e: # deleted grant was revoked
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1multi "select count(*) as n from test1"
+    stderr: "SELECT permission was denied"
+    exit-code: 1
+
+  sqlserver0069f: # added grant was applied
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1multi "select count(*) as n from test2" | jq -r '.rows[0].n'
+    stdout: "1"
+
+  sqlserver0069g: # untouched create grant remains
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1multi "create table multi_created_after_update (id int)"
+    stdout: '"command_tag": "CREATE"'
+
+  sqlserver0070: # revoke read:* from existing and future tables
+    command: ${OPENRUN_BIN} binding update --delete-grant "read:*" --promote /apps/ss1read
+    stdout: "Binding /apps/ss1read updated"
+
+  sqlserver0071:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1read "select count(*) as n from test1"
+    stderr: "SELECT permission was denied"
+    exit-code: 1
+
+  sqlserver0072:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1read "select count(*) as n from test2"
+    stderr: "SELECT permission was denied"
+    exit-code: 1
+
+  sqlserver0073: # revoke read:* also removes access to future tables
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1 "create table test_after_read_revoke (id int primary key)"
+    stdout: '"command_tag": "CREATE"'
+
+  sqlserver0074:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1read "select count(*) as n from test_after_read_revoke"
+    stderr: "SELECT permission was denied"
+    exit-code: 1
+
+  sqlserver0080: # revoke create:* removes create table privilege
+    command: ${OPENRUN_BIN} binding update --delete-grant "create:*" --promote /apps/ss1create
+    stdout: "Binding /apps/ss1create updated"
+
+  sqlserver0081:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1create "create table create_after_revoke (id int)"
+    stderr: "CREATE TABLE permission denied"
+    exit-code: 1
+
+  sqlserver0090: # revoke full:* removes table write/read and create privileges
+    command: ${OPENRUN_BIN} binding update --delete-grant "full:*" --promote /apps/ss1full
+    stdout: "Binding /apps/ss1full updated"
+
+  sqlserver0091:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1full "insert into test1 (id, note) values (6, 'full revoked')"
+    stderr: "INSERT permission was denied"
+    exit-code: 1
+
+  sqlserver0092:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1full "select count(*) as n from test1"
+    stderr: "SELECT permission was denied"
+    exit-code: 1
+
+  sqlserver0093:
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1full "create table full_after_revoke (id int)"
+    stderr: "CREATE TABLE permission denied"
+    exit-code: 1
+
+  sqlserver9990: # uninstall is refused while services of the provider types exist
+    command: ${OPENRUN_BIN} provider uninstall sqlserver
+    stderr: "service(s) exist"
+    exit-code: 1
+
+  sqlserver9999:
+    command: (${OPENRUN_BIN} binding delete /apps/ss1multi; ${OPENRUN_BIN} binding delete /apps/ss1fulltest1; ${OPENRUN_BIN} binding delete /apps/ss1full; ${OPENRUN_BIN} binding delete /apps/ss1stage; ${OPENRUN_BIN} binding delete /apps/ss1create; ${OPENRUN_BIN} binding delete /apps/ss1read; ${OPENRUN_BIN} binding delete /apps/ss1partialread; ${OPENRUN_BIN} binding delete /apps/ss1; ${OPENRUN_BIN} service delete sqlserver/ss1) || true
+
+  sqlserver9999a: # uninstall succeeds once the services are deleted
+    command: ${OPENRUN_BIN} provider uninstall sqlserver
+    stdout: "Provider sqlserver uninstalled"
+
+  sqlserver9999b: # the provider's service types are no longer available
+    command: ${OPENRUN_BIN} service create --config url=${TEST_SQLSERVER_URL} sqlserver/afteruninstall
+    stderr: "unknown service type"
+    exit-code: 1
+
+  sqlserver9999c: # provider list no longer includes the provider
+    command: ${OPENRUN_BIN} provider list -f json | jq -r '[.[] | select(.name=="sqlserver")] | length'
+    stdout: "0"
+
+  sqlserver9999d: # reinstall leaves a clean slate for reruns
+    command: ${OPENRUN_BIN} provider install sqlserver --source-url ${SQLSERVER_PROVIDER_BIN}
+    stdout: "Provider sqlserver dev installed"
