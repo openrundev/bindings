@@ -1,9 +1,9 @@
-module github.com/openrundev/openrun-bindings/oracle
+module github.com/openrundev/bindings/oracle
 
 go 1.26.5
 
 require (
-	github.com/openrundev/openrun/pkg/binding v0.0.0
+	github.com/openrundev/openrun/pkg/binding v0.1.0
 	github.com/sijms/go-ora/v2 v2.9.0
 )
 
@@ -24,6 +24,3 @@ require (
 	google.golang.org/grpc v1.80.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
-
-// TODO: remove once the pkg/binding module is tagged and published
-replace github.com/openrundev/openrun/pkg/binding => ../../openrun7/pkg/binding

@@ -1,9 +1,9 @@
-module github.com/openrundev/openrun-bindings/redis
+module github.com/openrundev/bindings/redis
 
 go 1.26.5
 
 require (
-	github.com/openrundev/openrun/pkg/binding v0.0.0
+	github.com/openrundev/openrun/pkg/binding v0.1.0
 	github.com/redis/go-redis/v9 v9.21.0
 )
 
@@ -26,6 +26,3 @@ require (
 	google.golang.org/grpc v1.80.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
-
-// TODO: remove once the pkg/binding module is tagged and published
-replace github.com/openrundev/openrun/pkg/binding => ../../openrun7/pkg/binding

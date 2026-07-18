@@ -3,3 +3,8 @@ openrun-binding-*
 go.work
 go.work.sum
 tests/run/
+# per-module go build outputs (named after the directory)
+mongodb/mongodb
+redis/redis
+sqlserver/sqlserver
+oracle/oracle

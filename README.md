@@ -89,7 +89,7 @@ Install a released provider with:
 
 ```sh
 openrun provider install redis --version v0.1.0 \
-  --source-url "https://github.com/openrundev/openrun-bindings/releases/download/redis%2F{version}/openrun-binding-redis-{os}-{arch}"
+  --source-url "https://github.com/openrundev/bindings/releases/download/redis%2F{version}/openrun-binding-redis-{os}-{arch}"
 ```
 
 ## Writing a new provider

@@ -6,7 +6,7 @@ name: Release
 # The release contains per-platform binaries named
 # openrun-binding-<provider>-<os>-<arch>[.exe] plus a SHA256SUMS file, matching
 # the `openrun provider install` source-url template:
-#   https://github.com/openrundev/openrun-bindings/releases/download/<provider>%2F{version}/openrun-binding-<provider>-{os}-{arch}
+#   https://github.com/openrundev/bindings/releases/download/<provider>%2F{version}/openrun-binding-<provider>-{os}-{arch}
 on:
   push:
     tags:
@@ -22,18 +22,10 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout openrun-bindings
+      - name: Checkout bindings
         uses: actions/checkout@v4
         with:
-          path: openrun-bindings
-          persist-credentials: false
-
-      # Needed for the pkg/binding replace directive until the SDK is published
-      - name: Checkout openrun
-        uses: actions/checkout@v4
-        with:
-          repository: openrundev/openrun
-          path: openrun7
+          path: bindings
           persist-credentials: false
 
       - name: Parse tag
@@ -47,15 +39,15 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: openrun-bindings/${{ steps.tag.outputs.provider }}/go.mod
-          cache-dependency-path: openrun-bindings/${{ steps.tag.outputs.provider }}/go.sum
+          go-version-file: bindings/${{ steps.tag.outputs.provider }}/go.mod
+          cache-dependency-path: bindings/${{ steps.tag.outputs.provider }}/go.sum
 
       - name: Unit tests
-        working-directory: openrun-bindings/${{ steps.tag.outputs.provider }}
+        working-directory: bindings/${{ steps.tag.outputs.provider }}
         run: go test ./...
 
       - name: Build release binaries
-        working-directory: openrun-bindings/${{ steps.tag.outputs.provider }}
+        working-directory: bindings/${{ steps.tag.outputs.provider }}
         env:
           PROVIDER: ${{ steps.tag.outputs.provider }}
           VERSION: ${{ steps.tag.outputs.version }}
@@ -75,4 +67,4 @@ jobs:
         with:
           name: "${{ steps.tag.outputs.provider }} ${{ steps.tag.outputs.version }}"
           files: |
-            openrun-bindings/dist/*
+            bindings/dist/*
