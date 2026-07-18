@@ -171,7 +171,7 @@ func TestBuildMongoRolePrivileges(t *testing.T) {
 }
 
 func TestBuildAtlasRoles(t *testing.T) {
-	baseline := atlasRole{RoleName: "read", DatabaseName: "cl_db", CollectionName: atlasBaselineCollection}
+	baseline := atlasRole{RoleName: "read", DatabaseName: atlasBaselineDatabase, CollectionName: atlasBaselineCollection}
 
 	roles, err := buildAtlasRoles("cl_db", nil)
 	if err != nil {
@@ -356,7 +356,7 @@ func TestAtlasGenerateAccountDerived(t *testing.T) {
 		t.Fatalf("error decoding request body: %v", err)
 	}
 	// A fresh derived user holds only the placeholder role
-	wantRoles := []atlasRole{{RoleName: "read", DatabaseName: "cl_prd_bnd_base1", CollectionName: atlasBaselineCollection}}
+	wantRoles := []atlasRole{{RoleName: "read", DatabaseName: atlasBaselineDatabase, CollectionName: atlasBaselineCollection}}
 	if !reflect.DeepEqual(user.Roles, wantRoles) {
 		t.Fatalf("posted roles = %v, want %v", user.Roles, wantRoles)
 	}
@@ -417,7 +417,7 @@ func TestAtlasApplyGrants(t *testing.T) {
 	}
 	// The union of applied and desired grants: pending revokes stay in effect
 	wantRoles := []atlasRole{
-		{RoleName: "read", DatabaseName: "cl_prd_bnd_base1", CollectionName: atlasBaselineCollection},
+		{RoleName: "read", DatabaseName: atlasBaselineDatabase, CollectionName: atlasBaselineCollection},
 		{RoleName: "read", DatabaseName: "cl_prd_bnd_base1", CollectionName: "sess"},
 		{RoleName: "read", DatabaseName: "cl_prd_bnd_base1"},
 		{RoleName: "readWrite", DatabaseName: "cl_prd_bnd_base1", CollectionName: "orders"},
@@ -453,6 +453,31 @@ func TestAtlasApplyGrantsRecreatesDeletedUser(t *testing.T) {
 	}
 }
 
+// A recreated user must preserve the cluster_name scope: dropping it would
+// silently widen the user's access to every cluster in the Atlas project.
+func TestAtlasRecreatedUserPreservesClusterScope(t *testing.T) {
+	userPath := "/api/atlas/v2/groups/proj1/databaseUsers/admin/cl_usr_prd_bnd_drv1"
+	server, requests := newAtlasStub(t, map[string]int{
+		"PATCH " + userPath:                             http.StatusNotFound,
+		"POST /api/atlas/v2/groups/proj1/databaseUsers": http.StatusCreated,
+	})
+	b := newAtlasTestBinding(server.URL, map[string]string{"cluster_name": "Cluster0"})
+
+	account := map[string]string{"username": "cl_usr_prd_bnd_drv1", "database": "cl_prd_bnd_base1", "password": "pw"}
+	bindingMetadata := binding.BindingMetadata{Grants: []string{"read:*"}}
+	if _, err := b.ApplyGrants(context.Background(), account, bindingMetadata, binding.BindingMetadata{}, true); err != nil {
+		t.Fatalf("ApplyGrants() error = %v", err)
+	}
+
+	var user atlasDatabaseUser
+	if err := json.Unmarshal((*requests)[1].Body, &user); err != nil {
+		t.Fatalf("error decoding request body: %v", err)
+	}
+	if len(user.Scopes) != 1 || user.Scopes[0].Name != "Cluster0" || user.Scopes[0].Type != "CLUSTER" {
+		t.Fatalf("recreated user scopes = %+v, cluster scope was dropped", user.Scopes)
+	}
+}
+
 func TestAtlasRevokeGrants(t *testing.T) {
 	userPath := "/api/atlas/v2/groups/proj1/databaseUsers/admin/cl_usr_prd_bnd_drv1"
 	server, requests := newAtlasStub(t, nil)
@@ -475,7 +500,7 @@ func TestAtlasRevokeGrants(t *testing.T) {
 		t.Fatalf("error decoding request body: %v", err)
 	}
 	wantRoles := []atlasRole{
-		{RoleName: "read", DatabaseName: "cl_prd_bnd_base1", CollectionName: atlasBaselineCollection},
+		{RoleName: "read", DatabaseName: atlasBaselineDatabase, CollectionName: atlasBaselineCollection},
 		{RoleName: "read", DatabaseName: "cl_prd_bnd_base1"},
 	}
 	if !reflect.DeepEqual(patch.Roles, wantRoles) {

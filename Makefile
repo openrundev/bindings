@@ -88,8 +88,9 @@ release: ## Tag and push a release; args: <sdk_version> <bindings_version>, e.g.
 >   git tag -a "$$m/$(INPUT2)" -m "Release $$m/$(INPUT2)"
 >   release_tags="$$release_tags $$m/$(INPUT2)"
 > done
-> git push origin HEAD $$release_tags
-> echo "Pushed$$release_tags; the release workflow now builds and publishes each provider"
+#> git push origin HEAD $$release_tags
+> echo "Created$$release_tags (push disabled); run: git push origin HEAD$$release_tags"
+> echo "The release workflow then builds and publishes each provider"
 
 # Swallow extra command line words used as arguments to targets (e.g. the
 # version arguments of `make release`)

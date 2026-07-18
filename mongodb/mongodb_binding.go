@@ -54,10 +54,13 @@ const (
 	mongoDBPrefixProd   = "cl_prd_"
 	mongoDBPrefixStg    = "cl_stg_"
 
-	// Collection name used for the placeholder role that keeps a derived
-	// Atlas user's roles array non-empty when it has no grants (the API
-	// rejects users without roles). read on a collection that never exists
-	// grants nothing usable.
+	// Database and collection used for the placeholder role that keeps a
+	// derived Atlas user's roles array non-empty when it has no grants (the
+	// API rejects users without roles). The placeholder is scoped to a
+	// dedicated dummy database, never the binding database: a collection in
+	// the real database could be created and would then be readable by every
+	// derived user without a grant.
+	atlasBaselineDatabase   = "cl_baseline_none_db"
 	atlasBaselineCollection = "cl_baseline_none"
 
 	// MongoDB error codes used for tolerated failures.
@@ -307,6 +310,25 @@ func (b *MongoServiceBinding) generateSelfHostedAccount(ctx context.Context, use
 // generateAtlasAccount creates the project-level database user through the
 // Atlas Admin API, then waits for the user to propagate to the cluster
 // (changes deploy asynchronously). A duplicate user fails the POST with 409.
+// newAtlasDatabaseUser builds the Atlas user payload, including the
+// cluster_name scope when configured. All user-creation paths (initial
+// creation and out-of-band 404 recreation) must go through this so a
+// recreated user never silently loses its cluster scoping and widens to the
+// whole project.
+func (b *MongoServiceBinding) newAtlasDatabaseUser(userName, password string, roles []atlasRole) atlasDatabaseUser {
+	user := atlasDatabaseUser{
+		DatabaseName: atlasAuthDatabase,
+		Username:     userName,
+		Password:     password,
+		Description:  "openrun service binding account",
+		Roles:        roles,
+	}
+	if clusterName := b.serviceConfig["cluster_name"]; clusterName != "" {
+		user.Scopes = []atlasScope{{Name: clusterName, Type: "CLUSTER"}}
+	}
+	return user
+}
+
 func (b *MongoServiceBinding) generateAtlasAccount(ctx context.Context, userName, password, databaseName string, isDerived bool) ([]binding.Artifact, error) {
 	var roles []atlasRole
 	var err error
@@ -322,16 +344,7 @@ func (b *MongoServiceBinding) generateAtlasAccount(ctx context.Context, userName
 		roles = atlasBaseRoles(databaseName)
 	}
 
-	user := atlasDatabaseUser{
-		DatabaseName: atlasAuthDatabase,
-		Username:     userName,
-		Password:     password,
-		Description:  "openrun service binding account",
-		Roles:        roles,
-	}
-	if clusterName := b.serviceConfig["cluster_name"]; clusterName != "" {
-		user.Scopes = []atlasScope{{Name: clusterName, Type: "CLUSTER"}}
-	}
+	user := b.newAtlasDatabaseUser(userName, password, roles)
 
 	if err := b.atlasClient.createDatabaseUser(ctx, user); err != nil {
 		return nil, fmt.Errorf("error creating atlas user %s: %w", userName, err)
@@ -475,13 +488,7 @@ func (b *MongoServiceBinding) setUserGrants(ctx context.Context, account map[str
 			// The user was deleted out-of-band; recreate it with the desired
 			// roles (`binding update --reapply-all` uses this to recover).
 			b.Warn().Msgf("atlas user %s not found, recreating", userName)
-			err = b.atlasClient.createDatabaseUser(ctx, atlasDatabaseUser{
-				DatabaseName: atlasAuthDatabase,
-				Username:     userName,
-				Password:     account["password"],
-				Description:  "openrun service binding account",
-				Roles:        roles,
-			})
+			err = b.atlasClient.createDatabaseUser(ctx, b.newAtlasDatabaseUser(userName, account["password"], roles))
 		}
 		if err != nil {
 			return fmt.Errorf("error applying grants to atlas user %s: %w", userName, err)
@@ -720,7 +727,7 @@ func atlasBaseRoles(database string) []atlasRole {
 // so the roles array is never empty (the Atlas API rejects users without
 // roles), including for a fresh derived user with no grants yet.
 func buildAtlasRoles(database string, grants []binding.BindingGrant) ([]atlasRole, error) {
-	roles := []atlasRole{{RoleName: "read", DatabaseName: database, CollectionName: atlasBaselineCollection}}
+	roles := []atlasRole{{RoleName: "read", DatabaseName: atlasBaselineDatabase, CollectionName: atlasBaselineCollection}}
 	addRole := func(role atlasRole) {
 		if !slices.Contains(roles, role) {
 			roles = append(roles, role)
