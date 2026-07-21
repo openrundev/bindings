@@ -18,6 +18,7 @@ on:
 permissions:
   contents: write
   packages: write
+  actions: read # SignPath downloads the unsigned artifact with the workflow token
 
 jobs:
   release:
@@ -61,7 +62,57 @@ jobs:
             echo "Building $out"
             CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "$out" .
           done
-          cd ../dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+
+      # Authenticode-sign the Windows binary via SignPath: the certificate
+      # lives in SignPath's HSM, so signing is a round-trip — upload the
+      # unsigned exe as a workflow artifact, SignPath signs it, download the
+      # signed copy and put it back in dist before checksums are computed.
+      # Skipped unless the SIGNPATH_PROJECT_SLUG repository variable is set
+      # (the OSS subscription allows one project, currently used by the
+      # openrun repo; set the variable once SignPath grants this repo one).
+      - name: Stage Windows binary for signing
+        if: vars.SIGNPATH_PROJECT_SLUG != ''
+        env:
+          PROVIDER: ${{ steps.tag.outputs.provider }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/unsigned"
+          # fixed file name so one SignPath artifact configuration covers all providers
+          cp "bindings/dist/openrun-binding-${PROVIDER}-windows-amd64.exe" "$RUNNER_TEMP/unsigned/openrun-binding.exe"
+
+      - name: Upload unsigned Windows binary
+        if: vars.SIGNPATH_PROJECT_SLUG != ''
+        id: upload-unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-unsigned
+          path: ${{ runner.temp }}/unsigned/openrun-binding.exe
+          if-no-files-found: error
+
+      - name: Sign Windows binary with SignPath
+        if: vars.SIGNPATH_PROJECT_SLUG != ''
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: 7825b39c-bb11-4b89-9458-997088c35878
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          # set the SIGNPATH_SIGNING_POLICY_SLUG repository variable to
+          # "test-signing" to sign with the self-signed test certificate
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          # leave room for manual approval of the signing request
+          wait-for-completion-timeout-in-seconds: "1800"
+          output-artifact-directory: ${{ runner.temp }}/signed
+
+      - name: Replace Windows binary with signed copy
+        if: vars.SIGNPATH_PROJECT_SLUG != ''
+        env:
+          PROVIDER: ${{ steps.tag.outputs.provider }}
+        run: cp "$RUNNER_TEMP/signed/openrun-binding.exe" "bindings/dist/openrun-binding-${PROVIDER}-windows-amd64.exe"
+
+      - name: Generate checksums
+        working-directory: bindings/dist
+        run: sha256sum -- * > SHA256SUMS && cat SHA256SUMS
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
