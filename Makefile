@@ -92,10 +92,19 @@ release: ## Tag a release (add PUSH=1 to also push); args: <sdk_version> <bindin
 >   release_tags="$$release_tags $$m/$(INPUT2)"
 > done
 > if [[ "$(PUSH)" == "1" ]]; then
->   git push origin HEAD$$release_tags
+>   git push origin HEAD
+>   # One push per tag: GitHub does not deliver push events (so the release
+>   # workflow does not run) when more than three tags are pushed at once
+>   for t in $$release_tags; do
+>     git push origin "$$t"
+>   done
 >   echo "Pushed$$release_tags; the release workflow now builds and publishes each provider"
 > else
->   echo "Created$$release_tags (not pushed); run: git push origin HEAD$$release_tags"
+>   echo "Created$$release_tags (not pushed); run: git push origin HEAD, then push each tag SEPARATELY"
+>   echo "(one push per tag; GitHub skips push events when more than three tags are pushed at once):"
+>   for t in $$release_tags; do
+>     echo "  git push origin $$t"
+>   done
 >   echo "The release workflow then builds and publishes each provider"
 > fi
 
