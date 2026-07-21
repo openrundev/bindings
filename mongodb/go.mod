@@ -4,7 +4,7 @@ go 1.26.5
 
 require (
 	github.com/icholy/digest v1.1.0
-	github.com/openrundev/openrun/pkg/binding v0.18.10
+	github.com/openrundev/openrun/pkg/binding v0.18.11
 	go.mongodb.org/mongo-driver/v2 v2.7.0
 	golang.org/x/oauth2 v0.34.0
 )

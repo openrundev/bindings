@@ -3,7 +3,7 @@ module github.com/openrundev/bindings/oracle
 go 1.26.5
 
 require (
-	github.com/openrundev/openrun/pkg/binding v0.18.10
+	github.com/openrundev/openrun/pkg/binding v0.18.11
 	github.com/sijms/go-ora/v2 v2.9.0
 )
 
