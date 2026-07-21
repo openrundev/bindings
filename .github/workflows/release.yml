@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   release:
@@ -68,3 +69,47 @@ jobs:
           name: "${{ steps.tag.outputs.provider }} ${{ steps.tag.outputs.version }}"
           files: |
             bindings/dist/*
+
+      # OCI distribution path: a FROM-scratch image per provider, consumed by
+      # the Helm chart's bindings.images init containers (the init container
+      # runs the binary's `export` subcommand to copy it into the shared
+      # volume the server discovers via bindings.preinstalled_dir).
+      - name: Generate provider image Dockerfile
+        working-directory: bindings/dist
+        env:
+          PROVIDER: ${{ steps.tag.outputs.provider }}
+        run: |
+          cat > Dockerfile <<EOF
+          FROM scratch
+          ARG TARGETOS
+          ARG TARGETARCH
+          COPY openrun-binding-${PROVIDER}-\${TARGETOS}-\${TARGETARCH} /openrun-binding-${PROVIDER}
+          ENTRYPOINT ["/openrun-binding-${PROVIDER}"]
+          EOF
+          cat Dockerfile
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push provider image
+        uses: docker/build-push-action@v6
+        with:
+          context: bindings/dist
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/openrun-binding-${{ steps.tag.outputs.provider }}:${{ steps.tag.outputs.version }}
+          labels: |
+            org.opencontainers.image.title=openrun-binding-${{ steps.tag.outputs.provider }}
+            org.opencontainers.image.description=OpenRun ${{ steps.tag.outputs.provider }} binding provider
+            org.opencontainers.image.version=${{ steps.tag.outputs.version }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}

@@ -12,6 +12,9 @@ INPUT2 := $(word 3,$(MAKECMDGOALS))
 
 MODULES := mongodb redis sqlserver oracle
 SDK_MODULE := github.com/openrundev/openrun/pkg/binding
+# Set PUSH=1 to have `make release` push the commit and tags (used by the
+# openrun repo's fullrelease target); default only creates them locally.
+PUSH ?=
 
 .DEFAULT_GOAL := help
 ifeq ($(origin .RECIPEPREFIX), undefined)
@@ -49,7 +52,7 @@ tags: ## Show the latest release tag of each provider
 >   echo "$$m: $$(git tag -l "$$m/v*" --sort=-creatordate | head -n 1)"
 > done
 
-release: ## Tag and push a release; args: <sdk_version> <bindings_version>, e.g. `make release v0.2.0 v0.1.0`
+release: ## Tag a release (add PUSH=1 to also push); args: <sdk_version> <bindings_version>, e.g. `make release v0.2.0 v0.1.0`
 > @if [[ -z "$(INPUT)" || -z "$(INPUT2)" ]]; then
 >   echo "Usage: make release <sdk_version> <bindings_version>, e.g. make release v0.2.0 v0.1.0"
 >   exit 1
@@ -88,9 +91,13 @@ release: ## Tag and push a release; args: <sdk_version> <bindings_version>, e.g.
 >   git tag -a "$$m/$(INPUT2)" -m "Release $$m/$(INPUT2)"
 >   release_tags="$$release_tags $$m/$(INPUT2)"
 > done
-#> git push origin HEAD $$release_tags
-> echo "Created$$release_tags (push disabled); run: git push origin HEAD$$release_tags"
-> echo "The release workflow then builds and publishes each provider"
+> if [[ "$(PUSH)" == "1" ]]; then
+>   git push origin HEAD$$release_tags
+>   echo "Pushed$$release_tags; the release workflow now builds and publishes each provider"
+> else
+>   echo "Created$$release_tags (not pushed); run: git push origin HEAD$$release_tags"
+>   echo "The release workflow then builds and publishes each provider"
+> fi
 
 # Swallow extra command line words used as arguments to targets (e.g. the
 # version arguments of `make release`)
