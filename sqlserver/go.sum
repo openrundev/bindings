@@ -60,8 +60,8 @@ github.com/microsoft/go-mssqldb v1.10.0 h1:pHEt+Qz6YFPWqREq10mqSE524QQo+/QremwTC
 github.com/microsoft/go-mssqldb v1.10.0/go.mod h1:mnG7lGa9iYJbzJqGCXyuQCegStKMr3kogDLD6+bmggg=
 github.com/oklog/run v1.1.0 h1:GEenZ1cK0+q0+wsJew9qUg/DyD8k3JzYsZAi5gYi2mA=
 github.com/oklog/run v1.1.0/go.mod h1:sVPdnTZT1zYwAJeCMu2Th4T21pA3FPOQRfWjQlk7DVU=
-github.com/openrundev/openrun/pkg/binding v0.18.9 h1:2kapV/mlcIOVK7+ocp96TLEERplgHj1GibwVAd/rODc=
-github.com/openrundev/openrun/pkg/binding v0.18.9/go.mod h1:pRshjwUNZF/oBaNN3VadPDn8lqoTBw2G4ViOqR2ThZA=
+github.com/openrundev/openrun/pkg/binding v0.18.10 h1:ZGU3zeXXtT9PKBJJkKqBrTxTKRuc3zo+1LqKsTD/CBI=
+github.com/openrundev/openrun/pkg/binding v0.18.10/go.mod h1:pRshjwUNZF/oBaNN3VadPDn8lqoTBw2G4ViOqR2ThZA=
 github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c h1:+mdjkGKdHQG3305AYmdv1U2eRNDiU2ErMBj1gwrq8eQ=
 github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c/go.mod h1:7rwL4CYBLnjLxUqIJNnCWiEdr3bn6IUYi15bNlnbCCU=
 github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=

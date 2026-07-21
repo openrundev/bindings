@@ -3,7 +3,7 @@ module github.com/openrundev/bindings/redis
 go 1.26.5
 
 require (
-	github.com/openrundev/openrun/pkg/binding v0.18.9
+	github.com/openrundev/openrun/pkg/binding v0.18.10
 	github.com/redis/go-redis/v9 v9.21.0
 )
 
