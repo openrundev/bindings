@@ -214,9 +214,9 @@ func (b *OracleServiceBinding) defaultTablespace(ctx context.Context) (string, e
 }
 
 // DeleteArtifact drops one user previously reported as created by
-// GenerateAccount. DROP USER CASCADE removes everything the user owns (tables,
-// the logon trigger for derived users), which is safe because the user was
-// created during the current operation.
+// GenerateAccount, either to undo a rolled-back operation or when the binding
+// is deleted. DROP USER CASCADE removes everything the user owns (tables, the
+// logon trigger for derived users).
 func (b *OracleServiceBinding) DeleteArtifact(ctx context.Context, artifact binding.Artifact) error {
 	if artifact.Name == "" {
 		return fmt.Errorf("artifact name is required")

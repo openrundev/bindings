@@ -181,11 +181,11 @@ func (b *SqlServerServiceBinding) GenerateAccount(ctx context.Context, bindingId
 }
 
 // DeleteArtifact drops one login, user or schema previously reported as created
-// by GenerateAccount. The caller passes artifacts back in reverse creation
-// order, so a base binding's schema is dropped before its owning user. A schema
-// created during the current operation can only contain objects created since,
-// so its contents are dropped before the schema itself (SQL Server has no DROP
-// SCHEMA CASCADE).
+// by GenerateAccount, either to undo a rolled-back operation or when the
+// binding is deleted. The caller passes artifacts back in reverse creation
+// order, so a base binding's schema is dropped before its owning user. The
+// schema's contents are dropped before the schema itself (SQL Server has no
+// DROP SCHEMA CASCADE).
 func (b *SqlServerServiceBinding) DeleteArtifact(ctx context.Context, artifact binding.Artifact) error {
 	if artifact.Name == "" {
 		return fmt.Errorf("artifact name is required")
