@@ -8,4 +8,5 @@ mongodb/mongodb
 redis/redis
 sqlserver/sqlserver
 oracle/oracle
+snowflake/snowflake
 design/

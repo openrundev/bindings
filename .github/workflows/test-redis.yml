@@ -37,7 +37,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: openrundev/openrun
-          path: openrun7
+          path: openrun
           persist-credentials: false
 
       - name: Setup Go
@@ -57,11 +57,11 @@ jobs:
 
       - name: Integration tests (RPC layer, redis)
         working-directory: bindings
-        run: OPENRUN_SRC="$GITHUB_WORKSPACE/openrun7" ./tests/run_int_tests.sh redis
+        run: OPENRUN_SRC="$GITHUB_WORKSPACE/openrun" ./tests/run_int_tests.sh redis
 
       - name: Integration tests (RPC layer, valkey)
         working-directory: bindings
         run: |
-          OPENRUN_SRC="$GITHUB_WORKSPACE/openrun7" \
+          OPENRUN_SRC="$GITHUB_WORKSPACE/openrun" \
           OPENRUN_TEST_REDIS_IMAGE=valkey/valkey:8-alpine \
           ./tests/run_int_tests.sh redis

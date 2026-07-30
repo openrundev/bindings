@@ -14,6 +14,7 @@ server binary keeps the server small and lets providers release independently.
 | `redis`     | `redis`, `valkey`   | ACL-based isolation, Redis 6+/Valkey             |
 | `sqlserver` | `sqlserver`         | Schema-based isolation, SQL Server 2019+         |
 | `oracle`    | `oracle`            | Pure-Go go-ora driver, no Oracle client needed   |
+| `snowflake` | `snowflake`         | Role/schema isolation, key-pair auth accounts    |
 
 ## Building
 
@@ -59,7 +60,7 @@ the commander yaml suite (`tests/test_<provider>.yaml`) through the CLI:
 
 ```sh
 go install github.com/commander-cli/commander/v2/cmd/commander@v2.5.0
-./tests/run_int_tests.sh redis      # or mongodb, sqlserver, oracle, all
+./tests/run_int_tests.sh redis      # or mongodb, sqlserver, oracle, snowflake, all
 OPENRUN_TEST_REDIS_IMAGE=valkey/valkey:8-alpine ./tests/run_int_tests.sh redis
 ```
 
@@ -67,6 +68,20 @@ Notes: the SQL Server image is amd64-only (arm64 hosts need Rosetta/qemu
 emulation in the container runtime); the oracle tests default to
 `gvenzl/oracle-xe:21-slim` on amd64 and `gvenzl/oracle-free:23-slim` on arm64,
 and the container takes a few minutes to initialize on first start.
+
+The snowflake suite has no container: it runs against a live Snowflake
+account. Set `TEST_SNOWFLAKE_ACCOUNT` (org-account identifier),
+`TEST_SNOWFLAKE_USER`, and either `TEST_SNOWFLAKE_PRIVATE_KEY` (unencrypted
+PKCS#8 PEM, preferred — Snowflake is phasing out password sign-in) or
+`TEST_SNOWFLAKE_PASSWORD` as the admin credential; the suite uses the private
+key when both are set. Optionally set `TEST_SNOWFLAKE_DATABASE` (default
+`OPENRUN_CLI`, must already exist) and `TEST_SNOWFLAKE_WAREHOUSE` (default
+`COMPUTE_WH`). With `all`, the snowflake suite is skipped unless
+`TEST_SNOWFLAKE_ACCOUNT` is set. In CI the credentials come from the
+`TEST_SNOWFLAKE_*` repository secrets. Binding deletion in OpenRun removes
+only metadata, so the `CL_`-prefixed users, roles and schemas the suite
+creates on the account are not dropped by the suite and must be cleaned up
+externally.
 
 ## CI
 

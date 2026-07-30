@@ -14,6 +14,7 @@ on:
       - "redis/v*"
       - "sqlserver/v*"
       - "oracle/v*"
+      - "snowflake/v*"
 
 permissions:
   contents: write

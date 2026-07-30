@@ -37,7 +37,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: openrundev/openrun
-          path: openrun7
+          path: openrun
           persist-credentials: false
 
       - name: Setup Go
@@ -57,4 +57,4 @@ jobs:
 
       - name: Integration tests (RPC layer)
         working-directory: bindings
-        run: OPENRUN_SRC="$GITHUB_WORKSPACE/openrun7" ./tests/run_int_tests.sh oracle
+        run: OPENRUN_SRC="$GITHUB_WORKSPACE/openrun" ./tests/run_int_tests.sh oracle

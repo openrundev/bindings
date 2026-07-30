@@ -8,7 +8,18 @@
 # launching the provider executable over go-plugin/gRPC), and the commander
 # yaml suites drive the CLI against a real service container.
 #
-# Usage: ./run_int_tests.sh [redis|mongodb|sqlserver|oracle|all]
+# Usage: ./run_int_tests.sh [redis|mongodb|sqlserver|oracle|snowflake|all]
+#
+# The snowflake suite runs against a real Snowflake account instead of a
+# container: set TEST_SNOWFLAKE_ACCOUNT (org-account identifier),
+# TEST_SNOWFLAKE_USER, and TEST_SNOWFLAKE_PRIVATE_KEY (unencrypted PKCS#8
+# PEM, preferred) or TEST_SNOWFLAKE_PASSWORD as the admin credential (e.g. an
+# ACCOUNTADMIN user; the private key wins when both are set). Optional:
+# TEST_SNOWFLAKE_DATABASE (default OPENRUN_CLI; must already exist) and
+# TEST_SNOWFLAKE_WAREHOUSE (default COMPUTE_WH). With `all`, the snowflake
+# suite is skipped unless TEST_SNOWFLAKE_ACCOUNT is set. Binding deletion in
+# OpenRun removes only metadata, so the CL_-prefixed users/roles/schemas the
+# suite creates on the account must be cleaned up externally.
 #
 # Requirements: docker (or OPENRUN_TEST_CONTAINER_COMMAND=podman), jq, and the
 # commander CLI (go install github.com/commander-cli/commander/v2/cmd/commander@v2.5.0).
@@ -22,14 +33,14 @@ set -e
 PROVIDER="${1:-all}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$SCRIPT_DIR")"
-OPENRUN_SRC="${OPENRUN_SRC:-$ROOT/../openrun7}"
+OPENRUN_SRC="${OPENRUN_SRC:-$ROOT/../openrun}"
 CONTAINER_COMMAND="${OPENRUN_TEST_CONTAINER_COMMAND:-docker}"
 CL_TEST_VERBOSE="${CL_TEST_VERBOSE:-}"
 
 case "$PROVIDER" in
-  redis|mongodb|sqlserver|oracle|all) ;;
+  redis|mongodb|sqlserver|oracle|snowflake|all) ;;
   *)
-    echo "usage: $0 [redis|mongodb|sqlserver|oracle|all]" >&2
+    echo "usage: $0 [redis|mongodb|sqlserver|oracle|snowflake|all]" >&2
     exit 1
     ;;
 esac
@@ -226,7 +237,9 @@ wait_for_service() {
 }
 
 # Non-default ports so the tests never clash with a locally running server;
-# the CLI talks over the workdir-scoped unix socket in any case.
+# the CLI talks over the workdir-scoped unix socket in any case. The env
+# secret provider backs {{secret_from "env" ...}} references in service
+# configs (used by the snowflake suite for the admin password).
 cat <<EOF > "$CL_CONFIG_FILE"
 [http]
 port = 25322
@@ -236,6 +249,8 @@ port = -1
 
 [client]
 default_format = "table"
+
+[secret.env]
 EOF
 
 if [[ "$PROVIDER" == "redis" || "$PROVIDER" == "all" ]]; then
@@ -257,6 +272,32 @@ if [[ "$PROVIDER" == "oracle" || "$PROVIDER" == "all" ]]; then
   build_provider oracle
   export ORACLE_PROVIDER_BIN="$WORK/bin/openrun-binding-oracle"
   start_oracle_container
+fi
+RUN_SNOWFLAKE=""
+if [[ "$PROVIDER" == "snowflake" ]]; then
+  RUN_SNOWFLAKE=true
+elif [[ "$PROVIDER" == "all" ]]; then
+  if [[ -n "${TEST_SNOWFLAKE_ACCOUNT:-}" ]]; then
+    RUN_SNOWFLAKE=true
+  else
+    echo "Skipping snowflake suite (TEST_SNOWFLAKE_ACCOUNT not set)"
+  fi
+fi
+if [[ -n "$RUN_SNOWFLAKE" ]]; then
+  : "${TEST_SNOWFLAKE_ACCOUNT:?set TEST_SNOWFLAKE_ACCOUNT (org-account identifier)}"
+  : "${TEST_SNOWFLAKE_USER:?set TEST_SNOWFLAKE_USER (admin user)}"
+  if [[ -z "${TEST_SNOWFLAKE_PRIVATE_KEY:-}" && -z "${TEST_SNOWFLAKE_PASSWORD:-}" ]]; then
+    echo "set TEST_SNOWFLAKE_PRIVATE_KEY (unencrypted PKCS#8 PEM, preferred) or TEST_SNOWFLAKE_PASSWORD" >&2
+    exit 1
+  fi
+  # Both are exported (possibly empty): the suite passes both as secret
+  # references and the provider uses the private key when it is non-empty.
+  export TEST_SNOWFLAKE_PRIVATE_KEY="${TEST_SNOWFLAKE_PRIVATE_KEY:-}"
+  export TEST_SNOWFLAKE_PASSWORD="${TEST_SNOWFLAKE_PASSWORD:-}"
+  export TEST_SNOWFLAKE_DATABASE="${TEST_SNOWFLAKE_DATABASE:-OPENRUN_CLI}"
+  export TEST_SNOWFLAKE_WAREHOUSE="${TEST_SNOWFLAKE_WAREHOUSE:-COMPUTE_WH}"
+  build_provider snowflake
+  export SNOWFLAKE_PROVIDER_BIN="$WORK/bin/openrun-binding-snowflake"
 fi
 
 echo "Starting openrun server"
@@ -284,6 +325,11 @@ if [[ "$PROVIDER" == "oracle" || "$PROVIDER" == "all" ]]; then
   "$OPENRUN_BIN" provider install oracle --source-url "$ORACLE_PROVIDER_BIN"
   wait_for_service oracle "$TEST_ORACLE_URL"
   commander test $CL_TEST_VERBOSE "$SCRIPT_DIR/test_oracle.yaml" || FAILED=1
+fi
+if [[ -n "$RUN_SNOWFLAKE" ]]; then
+  # No wait_for_service: the service is a cloud endpoint (the suite installs
+  # the provider itself so uninstall/reinstall is covered in one file).
+  commander test $CL_TEST_VERBOSE "$SCRIPT_DIR/test_snowflake.yaml" || FAILED=1
 fi
 
 exit $FAILED

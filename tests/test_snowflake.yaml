@@ -1,0 +1,116 @@
+config:
+  env:
+    CL_CONFIG_FILE: ${CL_CONFIG_FILE}
+    OPENRUN_BIN: ${OPENRUN_BIN}
+    SNOWFLAKE_PROVIDER_BIN: ${SNOWFLAKE_PROVIDER_BIN}
+    PATH: ${PATH}
+    TEST_SNOWFLAKE_ACCOUNT: ${TEST_SNOWFLAKE_ACCOUNT}
+    TEST_SNOWFLAKE_USER: ${TEST_SNOWFLAKE_USER}
+    TEST_SNOWFLAKE_PASSWORD: ${TEST_SNOWFLAKE_PASSWORD}
+    TEST_SNOWFLAKE_PRIVATE_KEY: ${TEST_SNOWFLAKE_PRIVATE_KEY}
+    TEST_SNOWFLAKE_DATABASE: ${TEST_SNOWFLAKE_DATABASE}
+    TEST_SNOWFLAKE_WAREHOUSE: ${TEST_SNOWFLAKE_WAREHOUSE}
+
+tests:
+  snowflake0000a: # provider install from a local binary registers it in the DB (RPC layer from here on)
+    command: ${OPENRUN_BIN} provider install snowflake --source-url ${SNOWFLAKE_PROVIDER_BIN}
+    stdout: "Provider snowflake dev installed"
+    exit-code: 0
+
+  snowflake0000b: # provider list shows the served service types
+    command: ${OPENRUN_BIN} provider list -f json | jq -r '.[] | select(.name=="snowflake") | .service_types | join(",")'
+    stdout: "snowflake"
+
+  snowflake0001: # service create resolves the admin credential through secret provider references; the provider uses the private key when set, the password otherwise
+    command: ${OPENRUN_BIN} service create --config account=${TEST_SNOWFLAKE_ACCOUNT} --config user=${TEST_SNOWFLAKE_USER} --config 'private_key={{secret_from "env" "TEST_SNOWFLAKE_PRIVATE_KEY"}}' --config 'password={{secret_from "env" "TEST_SNOWFLAKE_PASSWORD"}}' --config database=${TEST_SNOWFLAKE_DATABASE} --config warehouse=${TEST_SNOWFLAKE_WAREHOUSE} snowflake/sf1
+    stdout: "Service snowflake/sf1 created"
+    exit-code: 0
+
+  snowflake0010:
+    command: ${OPENRUN_BIN} binding create snowflake/sf1 /apps/sf1
+    stdout: "Binding /apps/sf1 created"
+    exit-code: 0
+
+  snowflake0010a: # generated accounts use key-pair auth, never passwords
+    command: ${OPENRUN_BIN} binding show-account /apps/sf1 | jq -r '.url | contains("authenticator=snowflake_jwt") and contains("privateKey=")'
+    stdout: "true"
+
+  snowflake0010b: # the private key is also returned as PEM for non-Go drivers
+    command: ${OPENRUN_BIN} binding show-account /apps/sf1 | jq -r '.private_key | startswith("-----BEGIN PRIVATE KEY-----")'
+    stdout: "true"
+
+  snowflake0011: # prod and staging accounts use different schemas
+    command: bash -c 'prod=$(${OPENRUN_BIN} binding run-command /apps/sf1 "select current_schema() as sch" | jq -r ".rows[0].SCH"); stage=$(${OPENRUN_BIN} binding run-command --staging /apps/sf1 "select current_schema() as sch" | jq -r ".rows[0].SCH"); [[ "$prod" != "$stage" && -n "$prod" ]] && echo true'
+    stdout: "true"
+
+  snowflake0020: # table-specific grant can be created before the table exists
+    command: ${OPENRUN_BIN} binding create --grant "read:test1" /apps/sf1 /apps/sf1partialread
+    stdout: "Binding /apps/sf1partialread created"
+
+  snowflake0021: # before creation, the target table is absent
+    command: ${OPENRUN_BIN} binding run-command /apps/sf1partialread "select count(*) as n from test1"
+    stderr: "does not exist or not authorized"
+    exit-code: 1
+
+  snowflake0030:
+    command: ${OPENRUN_BIN} binding run-command /apps/sf1 "create table test1 (id int primary key, note varchar(100))"
+    stdout: '"command_tag": "CREATE"'
+
+  snowflake0031:
+    command: ${OPENRUN_BIN} binding run-command /apps/sf1 "insert into test1 (id, note) values (1, 'base')"
+    stdout: '"rows_affected": 1'
+
+  snowflake0032: # deferred table grant is not applied until the binding is updated
+    command: ${OPENRUN_BIN} binding run-command /apps/sf1partialread "select count(*) as n from test1"
+    stderr: "does not exist or not authorized"
+    exit-code: 1
+
+  snowflake0033:
+    command: ${OPENRUN_BIN} binding update --promote /apps/sf1partialread
+    stdout: "Binding /apps/sf1partialread updated"
+
+  snowflake0034:
+    command: ${OPENRUN_BIN} binding run-command /apps/sf1partialread "select count(*) as n from test1" | jq -r '.rows[0].N'
+    stdout: "1"
+
+  snowflake0035: # read grant does not allow writes
+    command: ${OPENRUN_BIN} binding run-command /apps/sf1partialread "insert into test1 (id, note) values (2, 'denied')"
+    stderr: "privilege"
+    exit-code: 1
+
+  snowflake0040: # schema-wide full grant covers existing and future tables
+    command: ${OPENRUN_BIN} binding create --grant "full:*" /apps/sf1 /apps/sf1full
+    stdout: "Binding /apps/sf1full created"
+
+  snowflake0041:
+    command: ${OPENRUN_BIN} binding run-command /apps/sf1full "insert into test1 (id, note) values (3, 'derived')"
+    stdout: '"rows_affected": 1'
+
+  snowflake0041a: # full grant includes create privileges on the schema
+    command: ${OPENRUN_BIN} binding run-command /apps/sf1full "create table full_created (id int)"
+    stdout: '"command_tag": "CREATE"'
+
+  snowflake0042: # future grant: table created after the full:* grant is still writable
+    command: bash -c '${OPENRUN_BIN} binding run-command /apps/sf1 "create table test2 (id int)" >/dev/null && ${OPENRUN_BIN} binding run-command /apps/sf1full "insert into test2 (id) values (1)" | jq -r ".rows_affected"'
+    stdout: "1"
+
+  snowflake0050: # revoking the full grant removes write access again
+    command: ${OPENRUN_BIN} binding update --delete-grant "full:*" --promote /apps/sf1full
+    stdout: "Binding /apps/sf1full updated"
+
+  snowflake0051:
+    command: ${OPENRUN_BIN} binding run-command /apps/sf1full "insert into test1 (id, note) values (4, 'revoked')"
+    stderr: "does not exist or not authorized"
+    exit-code: 1
+
+  snowflake9990: # uninstall is refused while services of the provider types exist
+    command: ${OPENRUN_BIN} provider uninstall snowflake
+    stderr: "service(s) exist"
+    exit-code: 1
+
+  snowflake9999: # remove the binding/service metadata so uninstall is allowed; the generated roles/users/schemas stay on the account (binding delete removes only metadata) and are cleaned up externally
+    command: (${OPENRUN_BIN} binding delete /apps/sf1full; ${OPENRUN_BIN} binding delete /apps/sf1partialread; ${OPENRUN_BIN} binding delete /apps/sf1; ${OPENRUN_BIN} service delete snowflake/sf1) || true
+
+  snowflake9999a: # uninstall succeeds once the services are deleted
+    command: ${OPENRUN_BIN} provider uninstall snowflake
+    stdout: "Provider snowflake uninstalled"
