@@ -1,0 +1,68 @@
+name: Test clickhouse
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "clickhouse/**"
+      - "tests/**"
+      - ".github/workflows/test-clickhouse.yml"
+  pull_request:
+    paths:
+      - "clickhouse/**"
+      - "tests/**"
+      - ".github/workflows/test-clickhouse.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Runs are serialized without cancellation: when the optional
+# TEST_CLICKHOUSE_URL secret points at a shared live endpoint, a cancelled
+# run would leave half-created services/bindings behind on it.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      # Optional: an admin connection URL for a live endpoint (e.g. ClickHouse
+      # Cloud). When unset, the suite starts a local clickhouse-server
+      # container instead.
+      TEST_CLICKHOUSE_URL: ${{ secrets.TEST_CLICKHOUSE_URL }}
+    steps:
+      - name: Checkout bindings
+        uses: actions/checkout@v4
+        with:
+          path: bindings
+          persist-credentials: false
+
+      # The openrun checkout builds the server binary the integration tests
+      # drive; the pkg/binding SDK resolves from the published module.
+      - name: Checkout openrun
+        uses: actions/checkout@v4
+        with:
+          repository: openrundev/openrun
+          path: openrun
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: bindings/clickhouse/go.mod
+          cache-dependency-path: bindings/clickhouse/go.sum
+
+      - name: Unit tests
+        working-directory: bindings/clickhouse
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Install commander
+        run: go install github.com/commander-cli/commander/v2/cmd/commander@v2.5.0
+
+      - name: Integration tests (RPC layer)
+        working-directory: bindings
+        run: OPENRUN_SRC="$GITHUB_WORKSPACE/openrun" ./tests/run_int_tests.sh clickhouse

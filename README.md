@@ -15,6 +15,7 @@ server binary keeps the server small and lets providers release independently.
 | `sqlserver` | `sqlserver`         | Schema-based isolation, SQL Server 2019+         |
 | `oracle`    | `oracle`            | Pure-Go go-ora driver, no Oracle client needed   |
 | `snowflake` | `snowflake`         | Role/schema isolation, key-pair auth accounts    |
+| `clickhouse`| `clickhouse`        | Self-hosted and ClickHouse Cloud, role/database isolation |
 
 ## Building
 
@@ -60,7 +61,7 @@ the commander yaml suite (`tests/test_<provider>.yaml`) through the CLI:
 
 ```sh
 go install github.com/commander-cli/commander/v2/cmd/commander@v2.5.0
-./tests/run_int_tests.sh redis      # or mongodb, sqlserver, oracle, snowflake, all
+./tests/run_int_tests.sh redis      # or mongodb, sqlserver, oracle, snowflake, clickhouse, all
 OPENRUN_TEST_REDIS_IMAGE=valkey/valkey:8-alpine ./tests/run_int_tests.sh redis
 ```
 
@@ -82,6 +83,15 @@ key when both are set. Optionally set `TEST_SNOWFLAKE_DATABASE` (default
 only metadata, so the `CL_`-prefixed users, roles and schemas the suite
 creates on the account are not dropped by the suite and must be cleaned up
 externally.
+
+The clickhouse suite runs against a docker container by default
+(`clickhouse/clickhouse-server`, overridable with
+`OPENRUN_TEST_CLICKHOUSE_IMAGE`). Set `TEST_CLICKHOUSE_URL` to an admin
+connection URL to target a live endpoint instead, e.g.
+`https://default:password@abc123.region.aws.clickhouse.cloud:8443/default?secure=true`
+(ClickHouse Cloud) or `clickhouse://default:password@host:9000` (self-hosted).
+On a live endpoint, the `cl_`-prefixed users, roles and databases the suite
+creates are cleaned up externally (with the container they vanish with it).
 
 ## CI
 

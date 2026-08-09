@@ -8,7 +8,17 @@
 # launching the provider executable over go-plugin/gRPC), and the commander
 # yaml suites drive the CLI against a real service container.
 #
-# Usage: ./run_int_tests.sh [redis|mongodb|sqlserver|oracle|snowflake|all]
+# Usage: ./run_int_tests.sh [redis|mongodb|sqlserver|oracle|snowflake|clickhouse|all]
+#
+# The clickhouse suite runs against a docker container by default
+# (clickhouse/clickhouse-server, image overridable with
+# OPENRUN_TEST_CLICKHOUSE_IMAGE). Set TEST_CLICKHOUSE_URL to an admin
+# connection URL to run against a live endpoint instead, e.g.
+# https://default:password@abc123.us-west-2.aws.clickhouse.cloud:8443/default?secure=true
+# (ClickHouse Cloud) or clickhouse://default:password@host:9000 (self-hosted).
+# On a live endpoint, binding deletion removes only metadata, so the
+# cl_-prefixed users/roles/databases the suite creates are cleaned up
+# externally.
 #
 # The snowflake suite runs against a real Snowflake account instead of a
 # container: set TEST_SNOWFLAKE_ACCOUNT (org-account identifier),
@@ -38,9 +48,9 @@ CONTAINER_COMMAND="${OPENRUN_TEST_CONTAINER_COMMAND:-docker}"
 CL_TEST_VERBOSE="${CL_TEST_VERBOSE:-}"
 
 case "$PROVIDER" in
-  redis|mongodb|sqlserver|oracle|snowflake|all) ;;
+  redis|mongodb|sqlserver|oracle|snowflake|clickhouse|all) ;;
   *)
-    echo "usage: $0 [redis|mongodb|sqlserver|oracle|snowflake|all]" >&2
+    echo "usage: $0 [redis|mongodb|sqlserver|oracle|snowflake|clickhouse|all]" >&2
     exit 1
     ;;
 esac
@@ -68,7 +78,7 @@ build_provider() {
 cleanup() {
   "$OPENRUN_BIN" server stop >/dev/null 2>&1 || true
   local id
-  for id in "$REDIS_TEST_CONTAINER_ID" "$MONGODB_TEST_CONTAINER_ID" "$SQLSERVER_TEST_CONTAINER_ID" "$ORACLE_TEST_CONTAINER_ID"; do
+  for id in "$REDIS_TEST_CONTAINER_ID" "$MONGODB_TEST_CONTAINER_ID" "$SQLSERVER_TEST_CONTAINER_ID" "$ORACLE_TEST_CONTAINER_ID" "$CLICKHOUSE_TEST_CONTAINER_ID"; do
     if [[ -n "$id" ]]; then
       $CONTAINER_COMMAND stop -t 1 "$id" >/dev/null 2>&1 || true
     fi
@@ -206,6 +216,37 @@ start_oracle_container() {
   export TEST_ORACLE_URL="oracle://system:oracle@localhost:${port}/${service}"
 }
 
+start_clickhouse_container() {
+  local image="${OPENRUN_TEST_CLICKHOUSE_IMAGE:-clickhouse/clickhouse-server:25.8}"
+  echo "Starting clickhouse test container $image"
+  # CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT lets the default user run the
+  # access control DDL the binding needs (CREATE USER/ROLE, GRANT).
+  CLICKHOUSE_TEST_CONTAINER_ID=$($CONTAINER_COMMAND run --detach --rm \
+    --env CLICKHOUSE_PASSWORD=clickhouse \
+    --env CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 \
+    --ulimit nofile=262144:262144 \
+    --publish "127.0.0.1::8123" "$image")
+  export CLICKHOUSE_TEST_CONTAINER_ID
+  export CLICKHOUSE_TEST_CONTAINER_COMMAND="$CONTAINER_COMMAND"
+  local port
+  port=$(container_port "$CLICKHOUSE_TEST_CONTAINER_ID" 8123)
+
+  local ready=""
+  for _ in {1..120}; do
+    if curl -sS --max-time 2 "http://127.0.0.1:${port}/ping" 2>/dev/null | grep -q "Ok"; then
+      ready="true"
+      break
+    fi
+    sleep 1
+  done
+  if [[ -z "$ready" ]]; then
+    echo "ClickHouse test container did not become ready" >&2
+    $CONTAINER_COMMAND logs "$CLICKHOUSE_TEST_CONTAINER_ID" || true
+    return 1
+  fi
+  export TEST_CLICKHOUSE_URL="http://default:clickhouse@localhost:${port}/default"
+}
+
 wait_for_socket() {
   local attempt=0
   while [[ $attempt -lt 100 ]]; do
@@ -299,6 +340,15 @@ if [[ -n "$RUN_SNOWFLAKE" ]]; then
   build_provider snowflake
   export SNOWFLAKE_PROVIDER_BIN="$WORK/bin/openrun-binding-snowflake"
 fi
+if [[ "$PROVIDER" == "clickhouse" || "$PROVIDER" == "all" ]]; then
+  build_provider clickhouse
+  export CLICKHOUSE_PROVIDER_BIN="$WORK/bin/openrun-binding-clickhouse"
+  # A preset TEST_CLICKHOUSE_URL targets a live endpoint (e.g. ClickHouse
+  # Cloud); otherwise a local container is started.
+  if [[ -z "${TEST_CLICKHOUSE_URL:-}" ]]; then
+    start_clickhouse_container
+  fi
+fi
 
 echo "Starting openrun server"
 cd "$WORK"
@@ -330,6 +380,12 @@ if [[ -n "$RUN_SNOWFLAKE" ]]; then
   # No wait_for_service: the service is a cloud endpoint (the suite installs
   # the provider itself so uninstall/reinstall is covered in one file).
   commander test $CL_TEST_VERBOSE "$SCRIPT_DIR/test_snowflake.yaml" || FAILED=1
+fi
+if [[ "$PROVIDER" == "clickhouse" || "$PROVIDER" == "all" ]]; then
+  # No wait_for_service: the container start already waits for /ping (and a
+  # live endpoint is always up); the suite installs the provider itself so
+  # uninstall/reinstall is covered in one file.
+  commander test $CL_TEST_VERBOSE "$SCRIPT_DIR/test_clickhouse.yaml" || FAILED=1
 fi
 
 exit $FAILED
