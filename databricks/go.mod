@@ -5,7 +5,7 @@ go 1.26.5
 require (
 	github.com/databricks/databricks-sdk-go v0.170.0
 	github.com/databricks/databricks-sql-go v1.14.0
-	github.com/openrundev/openrun/pkg/binding v0.18.11
+	github.com/openrundev/openrun/pkg/binding v0.18.18
 )
 
 require (
