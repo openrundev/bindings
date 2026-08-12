@@ -8,7 +8,7 @@
 # launching the provider executable over go-plugin/gRPC), and the commander
 # yaml suites drive the CLI against a real service container.
 #
-# Usage: ./run_int_tests.sh [redis|mongodb|sqlserver|oracle|snowflake|clickhouse|all]
+# Usage: ./run_int_tests.sh [mongodb|sqlserver|oracle|snowflake|clickhouse|databricks|all]
 #
 # The clickhouse suite runs against a docker container by default
 # (clickhouse/clickhouse-server, image overridable with
@@ -48,9 +48,9 @@ CONTAINER_COMMAND="${OPENRUN_TEST_CONTAINER_COMMAND:-docker}"
 CL_TEST_VERBOSE="${CL_TEST_VERBOSE:-}"
 
 case "$PROVIDER" in
-  redis|mongodb|sqlserver|oracle|snowflake|clickhouse|all) ;;
+  mongodb|sqlserver|oracle|snowflake|clickhouse|databricks|all) ;;
   *)
-    echo "usage: $0 [redis|mongodb|sqlserver|oracle|snowflake|clickhouse|all]" >&2
+    echo "usage: $0 [mongodb|sqlserver|oracle|snowflake|clickhouse|databricks|all]" >&2
     exit 1
     ;;
 esac
@@ -78,7 +78,7 @@ build_provider() {
 cleanup() {
   "$OPENRUN_BIN" server stop >/dev/null 2>&1 || true
   local id
-  for id in "$REDIS_TEST_CONTAINER_ID" "$MONGODB_TEST_CONTAINER_ID" "$SQLSERVER_TEST_CONTAINER_ID" "$ORACLE_TEST_CONTAINER_ID" "$CLICKHOUSE_TEST_CONTAINER_ID"; do
+  for id in "$MONGODB_TEST_CONTAINER_ID" "$SQLSERVER_TEST_CONTAINER_ID" "$ORACLE_TEST_CONTAINER_ID" "$CLICKHOUSE_TEST_CONTAINER_ID"; do
     if [[ -n "$id" ]]; then
       $CONTAINER_COMMAND stop -t 1 "$id" >/dev/null 2>&1 || true
     fi
@@ -100,18 +100,6 @@ container_port() {
   done
   echo "Container port ${container_port} was not published for ${container_id}" >&2
   return 1
-}
-
-start_redis_container() {
-  # Set OPENRUN_TEST_REDIS_IMAGE=valkey/valkey:8-alpine to run against Valkey.
-  local image="${OPENRUN_TEST_REDIS_IMAGE:-redis:8-alpine}"
-  echo "Starting redis test container $image"
-  REDIS_TEST_CONTAINER_ID=$($CONTAINER_COMMAND run --detach --rm --publish "127.0.0.1::6379" "$image")
-  export REDIS_TEST_CONTAINER_ID
-  export REDIS_TEST_CONTAINER_COMMAND="$CONTAINER_COMMAND"
-  local port
-  port=$(container_port "$REDIS_TEST_CONTAINER_ID" 6379)
-  export TEST_REDIS_URL="redis://localhost:${port}"
 }
 
 start_mongodb_container() {
@@ -294,11 +282,6 @@ default_format = "table"
 [secret.env]
 EOF
 
-if [[ "$PROVIDER" == "redis" || "$PROVIDER" == "all" ]]; then
-  build_provider redis
-  export REDIS_PROVIDER_BIN="$WORK/bin/openrun-binding-redis"
-  start_redis_container
-fi
 if [[ "$PROVIDER" == "mongodb" || "$PROVIDER" == "all" ]]; then
   build_provider mongodb
   export MONGODB_PROVIDER_BIN="$WORK/bin/openrun-binding-mongodb"
@@ -340,6 +323,28 @@ if [[ -n "$RUN_SNOWFLAKE" ]]; then
   build_provider snowflake
   export SNOWFLAKE_PROVIDER_BIN="$WORK/bin/openrun-binding-snowflake"
 fi
+RUN_DATABRICKS=""
+if [[ "$PROVIDER" == "databricks" ]]; then
+  RUN_DATABRICKS=true
+elif [[ "$PROVIDER" == "all" ]]; then
+  if [[ -n "${TEST_DATABRICKS_HOST:-}" ]]; then
+    RUN_DATABRICKS=true
+  else
+    echo "Skipping databricks suite (TEST_DATABRICKS_HOST not set)"
+  fi
+fi
+if [[ -n "$RUN_DATABRICKS" ]]; then
+  # The databricks suite runs against a live workspace: set
+  # TEST_DATABRICKS_HOST, TEST_DATABRICKS_HTTP_PATH (SQL warehouse) and
+  # TEST_DATABRICKS_TOKEN (workspace admin PAT). TEST_DATABRICKS_CATALOG
+  # defaults to main; the catalog must already exist.
+  : "${TEST_DATABRICKS_HOST:?set TEST_DATABRICKS_HOST (workspace hostname)}"
+  : "${TEST_DATABRICKS_HTTP_PATH:?set TEST_DATABRICKS_HTTP_PATH (SQL warehouse http path)}"
+  : "${TEST_DATABRICKS_TOKEN:?set TEST_DATABRICKS_TOKEN (workspace admin PAT)}"
+  export TEST_DATABRICKS_CATALOG="${TEST_DATABRICKS_CATALOG:-main}"
+  build_provider databricks
+  export DATABRICKS_PROVIDER_BIN="$WORK/bin/openrun-binding-databricks"
+fi
 if [[ "$PROVIDER" == "clickhouse" || "$PROVIDER" == "all" ]]; then
   build_provider clickhouse
   export CLICKHOUSE_PROVIDER_BIN="$WORK/bin/openrun-binding-clickhouse"
@@ -356,11 +361,6 @@ cd "$WORK"
 wait_for_socket
 
 FAILED=0
-if [[ "$PROVIDER" == "redis" || "$PROVIDER" == "all" ]]; then
-  "$OPENRUN_BIN" provider install redis --source-url "$REDIS_PROVIDER_BIN"
-  wait_for_service redis "$TEST_REDIS_URL"
-  commander test $CL_TEST_VERBOSE "$SCRIPT_DIR/test_redis.yaml" || FAILED=1
-fi
 if [[ "$PROVIDER" == "mongodb" || "$PROVIDER" == "all" ]]; then
   "$OPENRUN_BIN" provider install mongodb --source-url "$MONGODB_PROVIDER_BIN"
   wait_for_service mongodb "$TEST_MONGODB_URL"
@@ -380,6 +380,11 @@ if [[ -n "$RUN_SNOWFLAKE" ]]; then
   # No wait_for_service: the service is a cloud endpoint (the suite installs
   # the provider itself so uninstall/reinstall is covered in one file).
   commander test $CL_TEST_VERBOSE "$SCRIPT_DIR/test_snowflake.yaml" || FAILED=1
+fi
+if [[ -n "$RUN_DATABRICKS" ]]; then
+  # No wait_for_service: the workspace is a live endpoint; the suite installs
+  # the provider itself so uninstall/reinstall is covered in one file.
+  commander test $CL_TEST_VERBOSE "$SCRIPT_DIR/test_databricks.yaml" || FAILED=1
 fi
 if [[ "$PROVIDER" == "clickhouse" || "$PROVIDER" == "all" ]]; then
   # No wait_for_service: the container start already waits for /ping (and a

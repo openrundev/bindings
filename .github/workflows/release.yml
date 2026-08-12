@@ -11,7 +11,7 @@ on:
   push:
     tags:
       - "mongodb/v*"
-      - "redis/v*"
+      - "databricks/v*"
       - "sqlserver/v*"
       - "oracle/v*"
       - "snowflake/v*"

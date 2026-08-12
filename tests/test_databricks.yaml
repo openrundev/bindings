@@ -1,0 +1,121 @@
+config:
+  env:
+    CL_CONFIG_FILE: ${CL_CONFIG_FILE}
+    OPENRUN_BIN: ${OPENRUN_BIN}
+    DATABRICKS_PROVIDER_BIN: ${DATABRICKS_PROVIDER_BIN}
+    PATH: ${PATH}
+    TEST_DATABRICKS_HOST: ${TEST_DATABRICKS_HOST}
+    TEST_DATABRICKS_HTTP_PATH: ${TEST_DATABRICKS_HTTP_PATH}
+    TEST_DATABRICKS_TOKEN: ${TEST_DATABRICKS_TOKEN}
+    TEST_DATABRICKS_CATALOG: ${TEST_DATABRICKS_CATALOG}
+
+tests:
+  databricks0000a: # provider install from a local binary registers it in the DB (RPC layer from here on)
+    command: ${OPENRUN_BIN} provider install databricks --source-url ${DATABRICKS_PROVIDER_BIN}
+    stdout: "Provider databricks dev installed"
+    exit-code: 0
+
+  databricks0000b: # provider list shows the served service types
+    command: ${OPENRUN_BIN} provider list -f json | jq -r '.[] | select(.name=="databricks") | .service_types | join(",")'
+    stdout: "databricks"
+
+  databricks0001: # service create resolves the admin token through a secret provider reference
+    command: ${OPENRUN_BIN} service create --config host=${TEST_DATABRICKS_HOST} --config http_path=${TEST_DATABRICKS_HTTP_PATH} --config 'token={{secret_from "env" "TEST_DATABRICKS_TOKEN"}}' --config catalog=${TEST_DATABRICKS_CATALOG} databricks/dbx1
+    stdout: "Service databricks/dbx1 created"
+    exit-code: 0
+
+  databricks0010:
+    command: ${OPENRUN_BIN} binding create databricks/dbx1 /apps/dbx1
+    stdout: "Binding /apps/dbx1 created"
+    exit-code: 0
+
+  databricks0010a: # generated account carries the connection fields app connectors expect
+    command: ${OPENRUN_BIN} binding show-account /apps/dbx1 | jq -r '(.host != "") and (.http_path != "") and (.client_id != "") and ((.auth_type == "oauth-m2m") or (.auth_type == "pat"))'
+    stdout: "true"
+
+  databricks0010b: # base account gets a prod schema in the configured catalog
+    command: ${OPENRUN_BIN} binding show-account /apps/dbx1 | jq -r '.schema | startswith("cl_sch_prd_")'
+    stdout: "true"
+
+  databricks0010c: # staging account gets a separate staging schema
+    command: ${OPENRUN_BIN} binding show-account --staging /apps/dbx1 | jq -r '.schema | startswith("cl_sch_stg_")'
+    stdout: "true"
+
+  databricks0011: # prod and staging accounts land in different schemas
+    command: bash -c 'prod=$(${OPENRUN_BIN} binding run-command /apps/dbx1 "select current_schema() as sch" | jq -r ".rows[0].sch"); stage=$(${OPENRUN_BIN} binding run-command --staging /apps/dbx1 "select current_schema() as sch" | jq -r ".rows[0].sch"); [[ "$prod" != "$stage" && -n "$prod" && "$prod" != "null" ]] && echo true'
+    stdout: "true"
+
+  databricks0020: # table-specific grant can be created before the table exists
+    command: ${OPENRUN_BIN} binding create --grant "read:test1" /apps/dbx1 /apps/dbx1partialread
+    stdout: "Binding /apps/dbx1partialread created"
+
+  databricks0021: # before creation, the target table is absent
+    command: ${OPENRUN_BIN} binding run-command /apps/dbx1partialread "select count(*) as n from test1"
+    exit-code: 1
+
+  databricks0030:
+    command: ${OPENRUN_BIN} binding run-command /apps/dbx1 "create table test1 (id int, note string)"
+    stdout: '"command_tag": "CREATE"'
+
+  databricks0031:
+    command: ${OPENRUN_BIN} binding run-command /apps/dbx1 "insert into test1 values (1, 'base')" | jq -r '.rows_affected'
+    stdout: "1"
+
+  databricks0032: # deferred table grant is not applied until the binding is updated
+    command: ${OPENRUN_BIN} binding run-command /apps/dbx1partialread "select count(*) as n from test1"
+    stderr: "INSUFFICIENT_PERMISSIONS"
+    exit-code: 1
+
+  databricks0033:
+    command: ${OPENRUN_BIN} binding update --promote /apps/dbx1partialread
+    stdout: "Binding /apps/dbx1partialread updated"
+
+  databricks0034:
+    command: ${OPENRUN_BIN} binding run-command /apps/dbx1partialread "select count(*) as n from test1" | jq -r '.rows[0].n'
+    stdout: "1"
+
+  databricks0035: # read grant does not allow writes, enforced by Unity Catalog
+    command: ${OPENRUN_BIN} binding run-command /apps/dbx1partialread "insert into test1 values (2, 'denied')"
+    stderr: "does not have MODIFY"
+    exit-code: 1
+
+  databricks0040: # schema-wide full grant covers existing and future tables
+    command: ${OPENRUN_BIN} binding create --grant "full:*" /apps/dbx1 /apps/dbx1full
+    stdout: "Binding /apps/dbx1full created"
+
+  databricks0041:
+    command: ${OPENRUN_BIN} binding run-command /apps/dbx1full "insert into test1 values (3, 'derived')" | jq -r '.rows_affected'
+    stdout: "1"
+
+  databricks0041a: # full grant includes create privileges on the schema
+    command: ${OPENRUN_BIN} binding run-command /apps/dbx1full "create table full_created (id int)"
+    stdout: '"command_tag": "CREATE"'
+
+  databricks0042: # privilege inheritance: table created after the full:* grant is still writable
+    command: bash -c '${OPENRUN_BIN} binding run-command /apps/dbx1 "create table test2 (id int)" >/dev/null && ${OPENRUN_BIN} binding run-command /apps/dbx1full "insert into test2 values (1)" | jq -r ".rows_affected"'
+    stdout: "1"
+
+  databricks0050: # revoking the full grant removes write access again
+    command: ${OPENRUN_BIN} binding update --delete-grant "full:*" --promote /apps/dbx1full
+    stdout: "Binding /apps/dbx1full updated"
+
+  databricks0050a: # the USE SCHEMA connect-baseline survives the revoke (full:* uses explicit privileges, not ALL PRIVILEGES)
+    command: ${OPENRUN_BIN} binding run-command /apps/dbx1full "select current_schema() as sch" | jq -r '.rows[0].sch | startswith("cl_sch_prd_")'
+    stdout: "true"
+
+  databricks0051: # the table privileges are gone: denial is at the table level, not schema resolution
+    command: ${OPENRUN_BIN} binding run-command /apps/dbx1full "insert into test1 values (4, 'revoked')"
+    stderr: "does not have SELECT on Table"
+    exit-code: 1
+
+  databricks9990: # uninstall is refused while services of the provider types exist
+    command: ${OPENRUN_BIN} provider uninstall databricks
+    stderr: "service(s) exist"
+    exit-code: 1
+
+  databricks9999: # remove the binding/service metadata so uninstall is allowed; the generated schemas/service principals stay on the workspace (binding delete removes only metadata) and are cleaned up externally
+    command: (${OPENRUN_BIN} binding delete /apps/dbx1full; ${OPENRUN_BIN} binding delete /apps/dbx1partialread; ${OPENRUN_BIN} binding delete /apps/dbx1; ${OPENRUN_BIN} service delete databricks/dbx1) || true
+
+  databricks9999a: # uninstall succeeds once the services are deleted
+    command: ${OPENRUN_BIN} provider uninstall databricks
+    stdout: "Provider databricks uninstalled"

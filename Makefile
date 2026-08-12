@@ -10,7 +10,7 @@ MAKEFLAGS += --no-builtin-rules
 INPUT := $(word 2,$(MAKECMDGOALS))
 INPUT2 := $(word 3,$(MAKECMDGOALS))
 
-MODULES := mongodb redis sqlserver oracle
+MODULES := mongodb sqlserver oracle databricks
 SDK_MODULE := github.com/openrundev/openrun/pkg/binding
 # Set PUSH=1 to have `make release` push the commit and tags (used by the
 # openrun repo's fullrelease target); default only creates them locally.
@@ -44,7 +44,7 @@ lint: ## Run lint for all provider modules
 >   (cd $$m && GOWORK=off golangci-lint run ./...)
 > done
 
-int: ## Run integration tests; optional arg: provider name, e.g. `make int redis` (default all)
+int: ## Run integration tests; optional arg: provider name, e.g. `make int mongodb` (default all)
 > ./tests/run_int_tests.sh $(if $(INPUT),$(INPUT),all)
 
 tags: ## Show the latest release tag of each provider

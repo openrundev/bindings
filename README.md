@@ -11,11 +11,11 @@ server binary keeps the server small and lets providers release independently.
 | Provider    | Service types       | Notes                                            |
 |-------------|---------------------|--------------------------------------------------|
 | `mongodb`   | `mongodb`, `atlas`  | Self-hosted MongoDB and MongoDB Atlas            |
-| `redis`     | `redis`, `valkey`   | ACL-based isolation, Redis 6+/Valkey             |
 | `sqlserver` | `sqlserver`         | Schema-based isolation, SQL Server 2019+         |
 | `oracle`    | `oracle`            | Pure-Go go-ora driver, no Oracle client needed   |
 | `snowflake` | `snowflake`         | Role/schema isolation, key-pair auth accounts    |
 | `clickhouse`| `clickhouse`        | Self-hosted and ClickHouse Cloud, role/database isolation |
+| `databricks`| `databricks`        | Databricks SQL warehouse, Unity Catalog schema isolation |
 
 ## Building
 
@@ -23,7 +23,7 @@ Each provider is its own module:
 
 ```sh
 cd mongodb && go build -o openrun-binding-mongodb .
-cd redis && go build -o openrun-binding-redis .
+cd sqlserver && go build -o openrun-binding-sqlserver .
 ```
 
 ## Installing
@@ -50,7 +50,7 @@ path = "/path/to/openrun-binding-mongodb"
 Unit tests are self-contained per module:
 
 ```sh
-cd redis && go test ./...
+cd mongodb && go test ./...
 ```
 
 Integration tests run through the full RPC layer: `tests/run_int_tests.sh`
@@ -61,8 +61,7 @@ the commander yaml suite (`tests/test_<provider>.yaml`) through the CLI:
 
 ```sh
 go install github.com/commander-cli/commander/v2/cmd/commander@v2.5.0
-./tests/run_int_tests.sh redis      # or mongodb, sqlserver, oracle, snowflake, clickhouse, all
-OPENRUN_TEST_REDIS_IMAGE=valkey/valkey:8-alpine ./tests/run_int_tests.sh redis
+./tests/run_int_tests.sh mongodb    # or sqlserver, oracle, snowflake, clickhouse, databricks, all
 ```
 
 Notes: the SQL Server image is amd64-only (arm64 hosts need Rosetta/qemu
@@ -98,14 +97,13 @@ creates are cleaned up externally (with the container they vanish with it).
 Each provider has its own workflow (`.github/workflows/test-<provider>.yml`),
 path-filtered so a change to one provider only builds and tests that provider.
 Each workflow runs the module's unit tests and the RPC-layer integration suite
-(the redis workflow runs it against both Redis and Valkey images).
 
 ## Releasing
 
 Push a `<provider>/vX.Y.Z` tag to trigger the release workflow:
 
 ```sh
-git tag redis/v0.1.0 && git push origin redis/v0.1.0
+git tag mongodb/v0.1.0 && git push origin mongodb/v0.1.0
 ```
 
 It builds `openrun-binding-<provider>-<os>-<arch>` binaries for
@@ -113,14 +111,14 @@ linux/darwin/windows plus a `SHA256SUMS` file and publishes a GitHub release.
 Install a released provider with:
 
 ```sh
-openrun provider install redis --version v0.1.0 \
-  --source-url "https://github.com/openrundev/bindings/releases/download/redis%2F{version}/openrun-binding-redis-{os}-{arch}"
+openrun provider install mongodb --version v0.1.0 \
+  --source-url "https://github.com/openrundev/bindings/releases/download/mongodb%2F{version}/openrun-binding-mongodb-{os}-{arch}"
 ```
 
 ## Writing a new provider
 
 Implement `binding.ServiceBinding` from
 `github.com/openrundev/openrun/pkg/binding` and call `binding.Serve` in `main`.
-See `redis/main.go` for a minimal example. Add a `tests/test_<name>.yaml`
+See `mongodb/main.go` for a minimal example. Add a `tests/test_<name>.yaml`
 commander suite, a `test-<name>.yml` workflow, and the provider's tag pattern
 to `release.yml`.

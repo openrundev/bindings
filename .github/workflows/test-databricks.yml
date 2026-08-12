@@ -1,0 +1,90 @@
+name: Test databricks
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "databricks/**"
+      - "tests/**"
+      - ".github/workflows/test-databricks.yml"
+  pull_request:
+    paths:
+      - "databricks/**"
+      - "tests/**"
+      - ".github/workflows/test-databricks.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# The integration suite runs against one shared live Databricks workspace, so
+# runs are serialized instead of cancelled: a cancelled run would leave
+# half-created services/bindings behind on the workspace.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      TEST_DATABRICKS_HOST: ${{ secrets.TEST_DATABRICKS_HOST }}
+      TEST_DATABRICKS_HTTP_PATH: ${{ secrets.TEST_DATABRICKS_HTTP_PATH }}
+      TEST_DATABRICKS_TOKEN: ${{ secrets.TEST_DATABRICKS_TOKEN }}
+      TEST_DATABRICKS_CATALOG: ${{ secrets.TEST_DATABRICKS_CATALOG }}
+    steps:
+      - name: Checkout bindings
+        uses: actions/checkout@v4
+        with:
+          path: bindings
+          persist-credentials: false
+
+      # The openrun checkout builds the server binary the integration tests
+      # drive; the pkg/binding SDK resolves from the published module.
+      - name: Checkout openrun
+        uses: actions/checkout@v4
+        with:
+          repository: openrundev/openrun
+          path: openrun
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: bindings/databricks/go.mod
+          cache-dependency-path: bindings/databricks/go.sum
+
+      - name: Unit tests
+        working-directory: bindings/databricks
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Check integration prerequisites
+        id: prereq
+        run: |
+          run=true
+          if [[ -z "$TEST_DATABRICKS_HOST" || -z "$TEST_DATABRICKS_HTTP_PATH" || -z "$TEST_DATABRICKS_TOKEN" ]]; then
+            echo "::notice::TEST_DATABRICKS_* secrets not configured; skipping databricks integration tests"
+            run=false
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+      # Direct provider-level lifecycle test against the live workspace,
+      # covering account provisioning, Unity Catalog grant enforcement and
+      # cleanup without the RPC layer.
+      - name: Integration tests (provider lifecycle)
+        if: steps.prereq.outputs.run == 'true'
+        working-directory: bindings/databricks
+        run: go test -run TestIntegrationDatabricksLifecycle -v -timeout 15m
+
+      - name: Install commander
+        if: steps.prereq.outputs.run == 'true'
+        run: go install github.com/commander-cli/commander/v2/cmd/commander@v2.5.0
+
+      # There is no containerized Databricks: the suite runs against the live
+      # test workspace configured through the TEST_DATABRICKS_* secrets.
+      - name: Integration tests (RPC layer)
+        if: steps.prereq.outputs.run == 'true'
+        working-directory: bindings
+        run: OPENRUN_SRC="$GITHUB_WORKSPACE/openrun" ./tests/run_int_tests.sh databricks
