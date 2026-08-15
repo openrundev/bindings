@@ -1,10 +1,10 @@
 module github.com/openrundev/bindings/sqlserver
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/microsoft/go-mssqldb v1.10.0
-	github.com/openrundev/openrun/pkg/binding v0.18.18
+	github.com/openrundev/openrun/pkg/binding v0.18.20
 )
 
 require (

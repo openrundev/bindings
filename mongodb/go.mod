@@ -1,10 +1,10 @@
 module github.com/openrundev/bindings/mongodb
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/icholy/digest v1.1.0
-	github.com/openrundev/openrun/pkg/binding v0.18.18
+	github.com/openrundev/openrun/pkg/binding v0.18.20
 	go.mongodb.org/mongo-driver/v2 v2.7.0
 	golang.org/x/oauth2 v0.34.0
 )

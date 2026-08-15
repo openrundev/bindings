@@ -38,8 +38,8 @@ github.com/mattn/go-isatty v0.0.19 h1:JITubQf0MOLdlGRuRq+jtsDlekdYPia9ZFsB8h/APP
 github.com/mattn/go-isatty v0.0.19/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
 github.com/oklog/run v1.1.0 h1:GEenZ1cK0+q0+wsJew9qUg/DyD8k3JzYsZAi5gYi2mA=
 github.com/oklog/run v1.1.0/go.mod h1:sVPdnTZT1zYwAJeCMu2Th4T21pA3FPOQRfWjQlk7DVU=
-github.com/openrundev/openrun/pkg/binding v0.18.18 h1:EJnZGCgUlyouF2oTRgLs8sfwQoLfi4TPK0vbIp4mevc=
-github.com/openrundev/openrun/pkg/binding v0.18.18/go.mod h1:hJpOaokgdT7Uq/5ZpfrvzmSOudLWgGla9eG+FUQHtWk=
+github.com/openrundev/openrun/pkg/binding v0.18.20 h1:5r2OgsI1YzNn9Nk4cN/ftzL0FDNwFinVBrnvA3DUD4U=
+github.com/openrundev/openrun/pkg/binding v0.18.20/go.mod h1:3kncHUqYC9mwLPAgMRhYlIOnwIsKIe5EPh8oAStoM3I=
 github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
