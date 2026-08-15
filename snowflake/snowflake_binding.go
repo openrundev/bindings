@@ -528,6 +528,17 @@ func (b *SnowflakeServiceBinding) RunCommand(ctx context.Context, bindingMetadat
 		sqlbinding.RunCommandOptions{RowReturningKeywords: []string{"SHOW", "DESC", "DESCRIBE", "LIST", "CALL"}})
 }
 
+// CheckHealth verifies the admin connection with a no-op query.
+func (b *SnowflakeServiceBinding) CheckHealth(ctx context.Context) error {
+	return sqlbinding.CheckHealth(ctx, b.adminConn, "select 1")
+}
+
+// CheckBindingHealth connects as the binding account and runs a no-op query,
+// verifying the generated user and role still exist and the key-pair works.
+func (b *SnowflakeServiceBinding) CheckBindingHealth(ctx context.Context, bindingMetadata binding.BindingMetadata) error {
+	return sqlbinding.CheckBindingHealth(ctx, "snowflake", bindingMetadata.Account[binding.AccountKeyURLDirect], "select 1")
+}
+
 // unquotedIdentRegex matches identifiers Snowflake resolves case-insensitively
 // when unquoted.
 var unquotedIdentRegex = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_$]*$`)

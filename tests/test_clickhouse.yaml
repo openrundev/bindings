@@ -98,13 +98,65 @@ tests:
     stderr: "Not enough privileges"
     exit-code: 1
 
+  clickhouse0100: # service and binding health checks connect and run a noop query
+    command: |
+      ${OPENRUN_BIN} service health clickhouse/ch1 >/dev/null
+      ${OPENRUN_BIN} binding health /apps/ch1 >/dev/null
+      ${OPENRUN_BIN} binding health --staging /apps/ch1 >/dev/null && echo healthy_all
+    stdout: "healthy_all"
+
+  clickhouse0101: # binding health fails after the user is dropped out-of-band; the staging account is unaffected
+    command: |
+      chbase=$(printf '%s' "$TEST_CLICKHOUSE_URL" | sed -E 's|^(https?://[^/?]*).*|\1/|')
+      ${OPENRUN_BIN} binding create clickhouse/ch1 /apps/chhealth >/dev/null
+      u=$(${OPENRUN_BIN} binding show-account /apps/chhealth | jq -r '.user')
+      curl -sS "$chbase" --data "DROP USER IF EXISTS $u" >/dev/null
+      if ${OPENRUN_BIN} binding health /apps/chhealth >/dev/null 2>&1; then prod=healthy; else prod=unhealthy; fi
+      ${OPENRUN_BIN} binding health --staging /apps/chhealth >/dev/null && echo "prod_${prod}/staging_healthy"
+    stdout: "prod_unhealthy/staging_healthy"
+
+  clickhouse0102: # the binding still deletes cleanly (dropping the missing user is harmless)
+    command: ${OPENRUN_BIN} binding delete /apps/chhealth
+    stdout: "Binding /apps/chhealth deleted"
+
+  # chq: run an admin query over the clickhouse HTTP interface. The admin
+  # credentials ride in TEST_CLICKHOUSE_URL (http(s) for both the container
+  # harness and ClickHouse Cloud); the DSN path/query is stripped for curl.
+  clickhouse0200: # deleting a derived binding drops its prod and staging users and roles on the server
+    command: |
+      chbase=$(printf '%s' "$TEST_CLICKHOUSE_URL" | sed -E 's|^(https?://[^/?]*).*|\1/|')
+      prod_acct=$(${OPENRUN_BIN} binding show-account /apps/ch1partialread)
+      stg_acct=$(${OPENRUN_BIN} binding show-account --staging /apps/ch1partialread)
+      prod_user=$(printf '%s' "$prod_acct" | jq -r '.user'); prod_role=$(printf '%s' "$prod_acct" | jq -r '.role')
+      stg_user=$(printf '%s' "$stg_acct" | jq -r '.user'); stg_role=$(printf '%s' "$stg_acct" | jq -r '.role')
+      ${OPENRUN_BIN} binding delete /apps/ch1partialread >/dev/null
+      curl -sS "$chbase" --data "SELECT (SELECT count() FROM system.users WHERE name IN ('$prod_user', '$stg_user')) + (SELECT count() FROM system.roles WHERE name IN ('$prod_role', '$stg_role'))"
+    stdout: "0"
+
+  clickhouse0201: # the base binding's database and data are untouched by the derived delete
+    command: ${OPENRUN_BIN} binding run-command /apps/ch1 "select count(*) as n from test1" | jq -r '.rows[0].n'
+    stdout: "1"
+
+  clickhouse0210: # deleting a base binding drops its databases (with contents), users and roles
+    command: |
+      ${OPENRUN_BIN} binding create clickhouse/ch1 /apps/chdelbase >/dev/null
+      prod_acct=$(${OPENRUN_BIN} binding show-account /apps/chdelbase)
+      stg_acct=$(${OPENRUN_BIN} binding show-account --staging /apps/chdelbase)
+      prod_user=$(printf '%s' "$prod_acct" | jq -r '.user'); prod_role=$(printf '%s' "$prod_acct" | jq -r '.role'); prod_db=$(printf '%s' "$prod_acct" | jq -r '.database')
+      stg_user=$(printf '%s' "$stg_acct" | jq -r '.user'); stg_role=$(printf '%s' "$stg_acct" | jq -r '.role'); stg_db=$(printf '%s' "$stg_acct" | jq -r '.database')
+      ${OPENRUN_BIN} binding run-command /apps/chdelbase "create table del_data (id Int32) ORDER BY id" >/dev/null
+      ${OPENRUN_BIN} binding delete /apps/chdelbase >/dev/null
+      chbase=$(printf '%s' "$TEST_CLICKHOUSE_URL" | sed -E 's|^(https?://[^/?]*).*|\1/|')
+      curl -sS "$chbase" --data "SELECT (SELECT count() FROM system.users WHERE name IN ('$prod_user', '$stg_user')) + (SELECT count() FROM system.roles WHERE name IN ('$prod_role', '$stg_role')) + (SELECT count() FROM system.databases WHERE name IN ('$prod_db', '$stg_db'))"
+    stdout: "0"
+
   clickhouse9990: # uninstall is refused while services of the provider types exist
     command: ${OPENRUN_BIN} provider uninstall clickhouse
     stderr: "service(s) exist"
     exit-code: 1
 
-  clickhouse9999: # remove the binding/service metadata so uninstall is allowed; the generated roles/users/databases stay on the service (binding delete removes only metadata) and are cleaned up externally
-    command: (${OPENRUN_BIN} binding delete /apps/ch1full; ${OPENRUN_BIN} binding delete /apps/ch1partialread; ${OPENRUN_BIN} binding delete /apps/ch1; ${OPENRUN_BIN} service delete clickhouse/ch1) || true
+  clickhouse9999: # remove the remaining bindings and the service so uninstall is allowed; binding delete also drops the generated roles/users/databases on the backend (bindings created by older OpenRun versions without recorded artifacts are cleaned up externally)
+    command: (${OPENRUN_BIN} binding delete /apps/ch1full; ${OPENRUN_BIN} binding delete /apps/ch1; ${OPENRUN_BIN} service delete clickhouse/ch1) || true
 
   clickhouse9999a: # uninstall succeeds once the services are deleted
     command: ${OPENRUN_BIN} provider uninstall clickhouse

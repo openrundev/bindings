@@ -108,7 +108,14 @@ tests:
     stderr: "service(s) exist"
     exit-code: 1
 
-  snowflake9999: # remove the binding/service metadata so uninstall is allowed; the generated roles/users/schemas stay on the account (binding delete removes only metadata) and are cleaned up externally
+  snowflake0100: # service and binding health checks connect and run a noop query
+    command: |
+      ${OPENRUN_BIN} service health snowflake/sf1 >/dev/null
+      ${OPENRUN_BIN} binding health /apps/sf1 >/dev/null
+      ${OPENRUN_BIN} binding health --staging /apps/sf1 >/dev/null && echo healthy_all
+    stdout: "healthy_all"
+
+  snowflake9999: # remove the bindings and the service so uninstall is allowed; binding delete also drops the generated roles/users/schemas on the account (bindings created by older OpenRun versions without recorded artifacts are cleaned up externally)
     command: (${OPENRUN_BIN} binding delete /apps/sf1full; ${OPENRUN_BIN} binding delete /apps/sf1partialread; ${OPENRUN_BIN} binding delete /apps/sf1; ${OPENRUN_BIN} service delete snowflake/sf1) || true
 
   snowflake9999a: # uninstall succeeds once the services are deleted

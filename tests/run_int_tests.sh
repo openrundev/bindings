@@ -16,9 +16,10 @@
 # connection URL to run against a live endpoint instead, e.g.
 # https://default:password@abc123.us-west-2.aws.clickhouse.cloud:8443/default?secure=true
 # (ClickHouse Cloud) or clickhouse://default:password@host:9000 (self-hosted).
-# On a live endpoint, binding deletion removes only metadata, so the
-# cl_-prefixed users/roles/databases the suite creates are cleaned up
-# externally.
+# Binding deletion drops the cl_-prefixed users/roles/databases the suite
+# created on the endpoint (container or live); the delete-verification tests
+# assert this through the container's clickhouse-client, so they need the
+# container mode.
 #
 # The snowflake suite runs against a real Snowflake account instead of a
 # container: set TEST_SNOWFLAKE_ACCOUNT (org-account identifier),
@@ -27,9 +28,10 @@
 # ACCOUNTADMIN user; the private key wins when both are set). Optional:
 # TEST_SNOWFLAKE_DATABASE (default OPENRUN_CLI; must already exist) and
 # TEST_SNOWFLAKE_WAREHOUSE (default COMPUTE_WH). With `all`, the snowflake
-# suite is skipped unless TEST_SNOWFLAKE_ACCOUNT is set. Binding deletion in
-# OpenRun removes only metadata, so the CL_-prefixed users/roles/schemas the
-# suite creates on the account must be cleaned up externally.
+# suite is skipped unless TEST_SNOWFLAKE_ACCOUNT is set. Binding deletion
+# drops the CL_-prefixed users/roles/schemas the suite created on the
+# account; only artifacts left by pre-artifact-recording OpenRun versions
+# need external cleanup.
 #
 # Requirements: docker (or OPENRUN_TEST_CONTAINER_COMMAND=podman), jq, and the
 # commander CLI (go install github.com/commander-cli/commander/v2/cmd/commander@v2.5.0).

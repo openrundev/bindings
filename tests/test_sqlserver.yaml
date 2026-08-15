@@ -357,6 +357,56 @@ tests:
     stderr: "CREATE TABLE permission denied"
     exit-code: 1
 
+  sqlserver0100: # service and binding health checks connect and run a noop query
+    command: |
+      ${OPENRUN_BIN} service health sqlserver/ss1 >/dev/null
+      ${OPENRUN_BIN} binding health /apps/ss1 >/dev/null
+      ${OPENRUN_BIN} binding health --staging /apps/ss1 >/dev/null && echo healthy_all
+    stdout: "healthy_all"
+
+  sqlserver0101: # binding health fails after the login is dropped out-of-band; the staging account is unaffected
+    command: |
+      ${OPENRUN_BIN} binding create sqlserver/ss1 /apps/sshealth >/dev/null
+      login=$(${OPENRUN_BIN} binding show-account /apps/sshealth | jq -r '.login')
+      "$SQLSERVER_TEST_CONTAINER_COMMAND" exec "$SQLSERVER_TEST_CONTAINER_ID" /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$TEST_SQLSERVER_PASSWORD" -Q "DROP LOGIN [$login]" 2>/dev/null || "$SQLSERVER_TEST_CONTAINER_COMMAND" exec "$SQLSERVER_TEST_CONTAINER_ID" /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "$TEST_SQLSERVER_PASSWORD" -Q "DROP LOGIN [$login]"
+      if ${OPENRUN_BIN} binding health /apps/sshealth >/dev/null 2>&1; then prod=healthy; else prod=unhealthy; fi
+      ${OPENRUN_BIN} binding health --staging /apps/sshealth >/dev/null && echo "prod_${prod}/staging_healthy"
+    stdout: "prod_unhealthy/staging_healthy"
+
+  sqlserver0102: # the binding still deletes cleanly (dropping the missing login is harmless)
+    command: ${OPENRUN_BIN} binding delete /apps/sshealth
+    stdout: "Binding /apps/sshealth deleted"
+
+  sqlserver0200: # deleting a derived binding drops its prod and staging logins and users on the server
+    command: |
+      prod_acct=$(${OPENRUN_BIN} binding show-account /apps/ss1read)
+      stg_acct=$(${OPENRUN_BIN} binding show-account --staging /apps/ss1read)
+      prod_login=$(printf '%s' "$prod_acct" | jq -r '.login'); prod_user=$(printf '%s' "$prod_acct" | jq -r '.user')
+      stg_login=$(printf '%s' "$stg_acct" | jq -r '.login'); stg_user=$(printf '%s' "$stg_acct" | jq -r '.user')
+      ${OPENRUN_BIN} binding delete /apps/ss1read >/dev/null
+      q="SET NOCOUNT ON; SELECT (SELECT COUNT(*) FROM sys.server_principals WHERE name IN ('$prod_login','$stg_login')) + (SELECT COUNT(*) FROM sys.database_principals WHERE name IN ('$prod_user','$stg_user'))"
+      n=$("$SQLSERVER_TEST_CONTAINER_COMMAND" exec "$SQLSERVER_TEST_CONTAINER_ID" /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$TEST_SQLSERVER_PASSWORD" -d openrun_cli -h -1 -W -Q "$q" 2>/dev/null || "$SQLSERVER_TEST_CONTAINER_COMMAND" exec "$SQLSERVER_TEST_CONTAINER_ID" /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "$TEST_SQLSERVER_PASSWORD" -d openrun_cli -h -1 -W -Q "$q")
+      echo "count=$n"
+    stdout: "count=0"
+
+  sqlserver0201: # the base binding's schema and data are untouched by the derived delete
+    command: ${OPENRUN_BIN} binding run-command /apps/ss1 "select count(*) as n from test1" | jq -r '.rows[0].n'
+    stdout: "3"
+
+  sqlserver0210: # deleting a base binding drops its schemas, users and logins, including tables created later
+    command: |
+      ${OPENRUN_BIN} binding create sqlserver/ss1 /apps/ssdelbase >/dev/null
+      prod_acct=$(${OPENRUN_BIN} binding show-account /apps/ssdelbase)
+      stg_acct=$(${OPENRUN_BIN} binding show-account --staging /apps/ssdelbase)
+      prod_login=$(printf '%s' "$prod_acct" | jq -r '.login'); prod_user=$(printf '%s' "$prod_acct" | jq -r '.user'); prod_schema=$(printf '%s' "$prod_acct" | jq -r '.schema')
+      stg_login=$(printf '%s' "$stg_acct" | jq -r '.login'); stg_user=$(printf '%s' "$stg_acct" | jq -r '.user'); stg_schema=$(printf '%s' "$stg_acct" | jq -r '.schema')
+      ${OPENRUN_BIN} binding run-command /apps/ssdelbase "create table del_data (id int primary key)" >/dev/null
+      ${OPENRUN_BIN} binding delete /apps/ssdelbase >/dev/null
+      q="SET NOCOUNT ON; SELECT (SELECT COUNT(*) FROM sys.server_principals WHERE name IN ('$prod_login','$stg_login')) + (SELECT COUNT(*) FROM sys.database_principals WHERE name IN ('$prod_user','$stg_user')) + (SELECT COUNT(*) FROM sys.schemas WHERE name IN ('$prod_schema','$stg_schema'))"
+      n=$("$SQLSERVER_TEST_CONTAINER_COMMAND" exec "$SQLSERVER_TEST_CONTAINER_ID" /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$TEST_SQLSERVER_PASSWORD" -d openrun_cli -h -1 -W -Q "$q" 2>/dev/null || "$SQLSERVER_TEST_CONTAINER_COMMAND" exec "$SQLSERVER_TEST_CONTAINER_ID" /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "$TEST_SQLSERVER_PASSWORD" -d openrun_cli -h -1 -W -Q "$q")
+      echo "count=$n"
+    stdout: "count=0"
+
   sqlserver9990: # uninstall is refused while services of the provider types exist
     command: ${OPENRUN_BIN} provider uninstall sqlserver
     stderr: "service(s) exist"

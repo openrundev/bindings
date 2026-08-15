@@ -555,6 +555,47 @@ func (b *MongoServiceBinding) restoreSelfHostedUser(ctx context.Context, account
 	return nil
 }
 
+// CheckHealth verifies the service is healthy. Self-hosted: ping with the
+// admin connection. Atlas: verify Admin API access and that the cluster URL
+// is reachable.
+func (b *MongoServiceBinding) CheckHealth(ctx context.Context) error {
+	if b.isAtlas {
+		if b.atlasClient == nil {
+			return fmt.Errorf("service is not initialized")
+		}
+		if err := b.atlasClient.verifyAccess(ctx); err != nil {
+			return fmt.Errorf("error verifying atlas api access: %w", err)
+		}
+		return checkMongoReachable(ctx, b.serviceConfig["url"])
+	}
+	if b.adminClient == nil {
+		return fmt.Errorf("service is not initialized")
+	}
+	if err := b.adminClient.Ping(ctx, nil); err != nil {
+		return fmt.Errorf("error pinging mongodb: %w", err)
+	}
+	return nil
+}
+
+// CheckBindingHealth connects as the binding account and pings the server.
+// Credentials in the account URL authenticate during the connection
+// handshake, so a dropped or disabled user fails the ping.
+func (b *MongoServiceBinding) CheckBindingHealth(ctx context.Context, bindingMetadata binding.BindingMetadata) error {
+	accountURL := bindingMetadata.Account["url_direct"]
+	if accountURL == "" {
+		return fmt.Errorf("binding account has no connection url")
+	}
+	client, err := mongo.Connect(options.Client().ApplyURI(accountURL))
+	if err != nil {
+		return fmt.Errorf("error connecting as binding account: %w", err)
+	}
+	defer client.Disconnect(ctx) //nolint:errcheck
+	if err := client.Ping(ctx, nil); err != nil {
+		return fmt.Errorf("error pinging mongodb as binding account: %w", err)
+	}
+	return nil
+}
+
 func (b *MongoServiceBinding) RunCommand(ctx context.Context, bindingMetadata binding.BindingMetadata, command string) (map[string]any, error) {
 	cmdDoc, err := parseMongoCommand(command)
 	if err != nil {

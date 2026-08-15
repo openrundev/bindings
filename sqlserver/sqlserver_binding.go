@@ -497,3 +497,14 @@ func (b *SqlServerServiceBinding) RunCommand(ctx context.Context, bindingMetadat
 	return sqlbinding.RunCommand(ctx, "sqlserver", bindingMetadata.Account[binding.AccountKeyURLDirect], command,
 		sqlbinding.RunCommandOptions{RowReturningKeywords: []string{"EXEC", "EXECUTE"}})
 }
+
+// CheckHealth verifies the admin connection with a no-op query.
+func (b *SqlServerServiceBinding) CheckHealth(ctx context.Context) error {
+	return sqlbinding.CheckHealth(ctx, b.adminConn, "select 1")
+}
+
+// CheckBindingHealth connects as the binding account and runs a no-op query,
+// verifying the generated login/user still exist and their credentials work.
+func (b *SqlServerServiceBinding) CheckBindingHealth(ctx context.Context, bindingMetadata binding.BindingMetadata) error {
+	return sqlbinding.CheckBindingHealth(ctx, "sqlserver", bindingMetadata.Account[binding.AccountKeyURLDirect], "select 1")
+}

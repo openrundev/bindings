@@ -550,6 +550,19 @@ func (b *DatabricksServiceBinding) RunCommand(ctx context.Context, bindingMetada
 		sqlbinding.RunCommandOptions{RowReturningKeywords: []string{"SHOW", "DESC", "DESCRIBE", "EXPLAIN", "VALUES", "LIST"}})
 }
 
+// CheckHealth verifies the admin SQL-plane connection with a no-op query
+// (this also wakes a stopped warehouse, like the init-time ping).
+func (b *DatabricksServiceBinding) CheckHealth(ctx context.Context) error {
+	return sqlbinding.CheckHealth(ctx, b.adminDB, "select 1")
+}
+
+// CheckBindingHealth connects as the binding account (PAT or OAuth M2M
+// service principal) and runs a no-op query, verifying the principal and its
+// credential still work.
+func (b *DatabricksServiceBinding) CheckBindingHealth(ctx context.Context, bindingMetadata binding.BindingMetadata) error {
+	return sqlbinding.CheckBindingHealth(ctx, "databricks", bindingMetadata.Account[binding.AccountKeyURLDirect], "select 1")
+}
+
 // databricksAccountURL composes the Go driver DSN for a generated account:
 // token:<pat>@host:443<http_path>?... for pat accounts, or
 // host:443<http_path>?authType=OauthM2M&clientID=..&clientSecret=.. for OAuth

@@ -374,6 +374,35 @@ tests:
     stderr: "does not exist"
     exit-code: 1
 
+  oracle0100: # service and binding health checks connect and run a noop query
+    command: |
+      ${OPENRUN_BIN} service health oracle/or1 >/dev/null
+      ${OPENRUN_BIN} binding health /apps/or1 >/dev/null
+      ${OPENRUN_BIN} binding health --staging /apps/or1 >/dev/null && echo healthy_all
+    stdout: "healthy_all"
+
+  oracle0200: # deleting a derived binding drops its prod and staging users on the database
+    command: |
+      prod_user=$(${OPENRUN_BIN} binding show-account /apps/or1read | jq -r '.user')
+      stg_user=$(${OPENRUN_BIN} binding show-account --staging /apps/or1read | jq -r '.user')
+      ${OPENRUN_BIN} binding delete /apps/or1read >/dev/null
+      ${OPENRUN_BIN} binding run-command /apps/or1 "select count(*) as n from all_users where username in ('$prod_user', '$stg_user')" | jq -r '.rows[0].N'
+    stdout: "0"
+
+  oracle0201: # the base binding's schema and data are untouched by the derived delete
+    command: ${OPENRUN_BIN} binding run-command /apps/or1 "select count(*) as n from test1" | jq -r '.rows[0].N'
+    stdout: "3"
+
+  oracle0210: # deleting a base binding drops its prod and staging users with their objects (CASCADE)
+    command: |
+      ${OPENRUN_BIN} binding create oracle/or1 /apps/ordelbase >/dev/null
+      prod_user=$(${OPENRUN_BIN} binding show-account /apps/ordelbase | jq -r '.user')
+      stg_user=$(${OPENRUN_BIN} binding show-account --staging /apps/ordelbase | jq -r '.user')
+      ${OPENRUN_BIN} binding run-command /apps/ordelbase "create table del_data (id integer primary key)" >/dev/null
+      ${OPENRUN_BIN} binding delete /apps/ordelbase >/dev/null
+      ${OPENRUN_BIN} binding run-command /apps/or1 "select count(*) as n from all_users where username in ('$prod_user', '$stg_user')" | jq -r '.rows[0].N'
+    stdout: "0"
+
   oracle9990: # uninstall is refused while services of the provider types exist
     command: ${OPENRUN_BIN} provider uninstall oracle
     stderr: "service(s) exist"

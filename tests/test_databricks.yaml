@@ -113,7 +113,14 @@ tests:
     stderr: "service(s) exist"
     exit-code: 1
 
-  databricks9999: # remove the binding/service metadata so uninstall is allowed; the generated schemas/service principals stay on the workspace (binding delete removes only metadata) and are cleaned up externally
+  databricks0100: # service and binding health checks connect and run a noop query (OAuth M2M for the binding principals)
+    command: |
+      ${OPENRUN_BIN} service health databricks/dbx1 >/dev/null
+      ${OPENRUN_BIN} binding health /apps/dbx1 >/dev/null
+      ${OPENRUN_BIN} binding health --staging /apps/dbx1 >/dev/null && echo healthy_all
+    stdout: "healthy_all"
+
+  databricks9999: # remove the bindings and the service so uninstall is allowed; binding delete also drops the generated schemas/service principals on the workspace (bindings created by older OpenRun versions without recorded artifacts are cleaned up externally)
     command: (${OPENRUN_BIN} binding delete /apps/dbx1full; ${OPENRUN_BIN} binding delete /apps/dbx1partialread; ${OPENRUN_BIN} binding delete /apps/dbx1; ${OPENRUN_BIN} service delete databricks/dbx1) || true
 
   databricks9999a: # uninstall succeeds once the services are deleted

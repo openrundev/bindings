@@ -243,6 +243,47 @@ tests:
     stderr: "not authorized"
     exit-code: 1
 
+  mongodb0100: # service and binding health checks connect and ping the server
+    command: |
+      ${OPENRUN_BIN} service health mongodb/m1 >/dev/null
+      ${OPENRUN_BIN} binding health /apps/m1 >/dev/null
+      ${OPENRUN_BIN} binding health --staging /apps/m1 >/dev/null && echo healthy_all
+    stdout: "healthy_all"
+
+  mongodb0101: # binding health fails after the user is dropped out-of-band; the staging account is unaffected
+    command: |
+      ${OPENRUN_BIN} binding create mongodb/m1 /apps/mhealth >/dev/null
+      u=$(${OPENRUN_BIN} binding show-account /apps/mhealth | jq -r '.username')
+      $MONGODB_TEST_CONTAINER_COMMAND exec $MONGODB_TEST_CONTAINER_ID mongosh -u root -p mongo --quiet admin --eval "db.dropUser('$u')" >/dev/null
+      if ${OPENRUN_BIN} binding health /apps/mhealth >/dev/null 2>&1; then prod=healthy; else prod=unhealthy; fi
+      ${OPENRUN_BIN} binding health --staging /apps/mhealth >/dev/null && echo "prod_${prod}/staging_healthy"
+    stdout: "prod_unhealthy/staging_healthy"
+
+  mongodb0102: # the binding still deletes cleanly (dropping the missing user is harmless)
+    command: ${OPENRUN_BIN} binding delete /apps/mhealth
+    stdout: "Binding /apps/mhealth deleted"
+
+  mongodb0200: # deleting a derived binding drops its prod and staging users and roles on the server
+    command: |
+      prod_user=$(${OPENRUN_BIN} binding show-account /apps/m1read | jq -r '.username')
+      stg_user=$(${OPENRUN_BIN} binding show-account --staging /apps/m1read | jq -r '.username')
+      ${OPENRUN_BIN} binding delete /apps/m1read >/dev/null
+      $MONGODB_TEST_CONTAINER_COMMAND exec $MONGODB_TEST_CONTAINER_ID mongosh -u root -p mongo --quiet admin --eval "db.getSiblingDB('admin').system.users.countDocuments({user: {\$in: ['$prod_user', '$stg_user']}}) + db.getSiblingDB('admin').system.roles.countDocuments({role: {\$in: ['$prod_user', '$stg_user']}})"
+    stdout: "0"
+
+  mongodb0201: # the base binding's data is untouched by the derived delete
+    command: ${OPENRUN_BIN} binding run-command /apps/m1 '{"find":"t1"}' | jq -r '.result.cursor.firstBatch[0].k'
+    stdout: "v1"
+
+  mongodb0210: # deleting a base binding drops its prod and staging users (the data database is kept)
+    command: |
+      ${OPENRUN_BIN} binding create mongodb/m1 /apps/mdelbase >/dev/null
+      prod_user=$(${OPENRUN_BIN} binding show-account /apps/mdelbase | jq -r '.username')
+      stg_user=$(${OPENRUN_BIN} binding show-account --staging /apps/mdelbase | jq -r '.username')
+      ${OPENRUN_BIN} binding delete /apps/mdelbase >/dev/null
+      $MONGODB_TEST_CONTAINER_COMMAND exec $MONGODB_TEST_CONTAINER_ID mongosh -u root -p mongo --quiet admin --eval "db.getSiblingDB('admin').system.users.countDocuments({user: {\$in: ['$prod_user', '$stg_user']}})"
+    stdout: "0"
+
   mongodb9990: # uninstall is refused while services of the provider types exist
     command: ${OPENRUN_BIN} provider uninstall mongodb
     stderr: "service(s) exist"

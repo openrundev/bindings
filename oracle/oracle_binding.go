@@ -497,3 +497,14 @@ func (b *OracleServiceBinding) RunCommand(ctx context.Context, bindingMetadata b
 	return sqlbinding.RunCommand(ctx, "oracle", bindingMetadata.Account[binding.AccountKeyURLDirect], command,
 		sqlbinding.RunCommandOptions{})
 }
+
+// CheckHealth verifies the admin connection with a no-op query.
+func (b *OracleServiceBinding) CheckHealth(ctx context.Context) error {
+	return sqlbinding.CheckHealth(ctx, b.adminConn, "select 1 from dual")
+}
+
+// CheckBindingHealth connects as the binding account and runs a no-op query,
+// verifying the generated user still exists and its credentials work.
+func (b *OracleServiceBinding) CheckBindingHealth(ctx context.Context, bindingMetadata binding.BindingMetadata) error {
+	return sqlbinding.CheckBindingHealth(ctx, "oracle", bindingMetadata.Account[binding.AccountKeyURLDirect], "select 1 from dual")
+}

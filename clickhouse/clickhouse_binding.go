@@ -410,6 +410,17 @@ func (b *ClickHouseServiceBinding) RunCommand(ctx context.Context, bindingMetada
 		sqlbinding.RunCommandOptions{RowReturningKeywords: []string{"SHOW", "DESC", "DESCRIBE", "EXISTS", "EXPLAIN"}})
 }
 
+// CheckHealth verifies the admin connection with a no-op query.
+func (b *ClickHouseServiceBinding) CheckHealth(ctx context.Context) error {
+	return sqlbinding.CheckHealth(ctx, b.adminConn, "select 1")
+}
+
+// CheckBindingHealth connects as the binding account and runs a no-op query,
+// verifying the generated user still exists and its credentials work.
+func (b *ClickHouseServiceBinding) CheckBindingHealth(ctx context.Context, bindingMetadata binding.BindingMetadata) error {
+	return sqlbinding.CheckBindingHealth(ctx, "clickhouse", bindingMetadata.Account[binding.AccountKeyURLDirect], "select 1")
+}
+
 // generateClickhousePassword returns a random password satisfying ClickHouse
 // Cloud's complexity policy (12+ chars with lower, upper, digit and special).
 // The special characters are URL-unreserved so the password embeds in account
