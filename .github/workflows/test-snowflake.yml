@@ -46,6 +46,7 @@ jobs:
       # The openrun checkout builds the server binary the integration tests
       # drive; the pkg/binding SDK resolves from the published module.
       - name: Checkout openrun
+        id: openrun
         uses: actions/checkout@v4
         with:
           repository: openrundev/openrun
@@ -53,10 +54,14 @@ jobs:
           persist-credentials: false
 
       - name: Setup Go
+        id: go
         uses: actions/setup-go@v5
         with:
           go-version-file: bindings/snowflake/go.mod
-          cache-dependency-path: bindings/snowflake/go.sum
+          cache: true
+          cache-dependency-path: |
+            bindings/snowflake/go.sum
+            openrun/go.sum
 
       - name: Unit tests
         working-directory: bindings/snowflake
@@ -81,8 +86,31 @@ jobs:
           fi
           echo "run=$run" >> "$GITHUB_OUTPUT"
 
-      - name: Install commander
+      - name: Cache OpenRun server
         if: steps.prereq.outputs.run == 'true'
+        id: openrun-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/openrun-ci/openrun
+          key: openrun-server-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.openrun.outputs.commit }}
+
+      - name: Build OpenRun server
+        if: steps.prereq.outputs.run == 'true' && steps.openrun-cache.outputs.cache-hit != 'true'
+        working-directory: openrun
+        run: |
+          mkdir -p "$HOME/.cache/openrun-ci"
+          go build -o "$HOME/.cache/openrun-ci/openrun" ./cmd/openrun
+
+      - name: Cache commander
+        if: steps.prereq.outputs.run == 'true'
+        id: commander-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/go/bin/commander
+          key: commander-${{ runner.os }}-${{ runner.arch }}-go-${{ steps.go.outputs.go-version }}-v2.5.0
+
+      - name: Install commander
+        if: steps.prereq.outputs.run == 'true' && steps.commander-cache.outputs.cache-hit != 'true'
         run: go install github.com/commander-cli/commander/v2/cmd/commander@v2.5.0
 
       # There is no containerized Snowflake: the suite runs against the live
@@ -90,4 +118,4 @@ jobs:
       - name: Integration tests (RPC layer)
         if: steps.prereq.outputs.run == 'true'
         working-directory: bindings
-        run: OPENRUN_SRC="$GITHUB_WORKSPACE/openrun" ./tests/run_int_tests.sh snowflake
+        run: OPENRUN_SRC="$GITHUB_WORKSPACE/openrun" OPENRUN_TEST_SERVER_BIN="$HOME/.cache/openrun-ci/openrun" ./tests/run_int_tests.sh snowflake

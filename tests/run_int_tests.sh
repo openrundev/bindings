@@ -38,7 +38,8 @@
 #
 # OPENRUN_SRC points at a checkout of the openrundev/openrun repo (used to
 # build the server and resolve the pkg/binding SDK module); it defaults to a
-# sibling checkout.
+# sibling checkout. OPENRUN_TEST_SERVER_BIN can point at a prebuilt server
+# binary, which CI uses to avoid rebuilding an unchanged OpenRun checkout.
 
 set -e
 
@@ -68,8 +69,17 @@ export OPENRUN_HOME="$WORK"
 export OPENRUN_BIN="$WORK/bin/openrun"
 export CL_CONFIG_FILE="$WORK/openrun.toml"
 
-echo "Building openrun server from $OPENRUN_SRC"
-(cd "$OPENRUN_SRC" && go build -o "$OPENRUN_BIN" ./cmd/openrun)
+if [[ -n "${OPENRUN_TEST_SERVER_BIN:-}" ]]; then
+  if [[ ! -x "$OPENRUN_TEST_SERVER_BIN" ]]; then
+    echo "Prebuilt OpenRun server is not executable: $OPENRUN_TEST_SERVER_BIN" >&2
+    exit 1
+  fi
+  echo "Using prebuilt openrun server from $OPENRUN_TEST_SERVER_BIN"
+  cp "$OPENRUN_TEST_SERVER_BIN" "$OPENRUN_BIN"
+else
+  echo "Building openrun server from $OPENRUN_SRC"
+  (cd "$OPENRUN_SRC" && go build -o "$OPENRUN_BIN" ./cmd/openrun)
+fi
 
 build_provider() {
   local name="$1"
