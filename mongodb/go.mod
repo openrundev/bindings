@@ -1,6 +1,6 @@
 module github.com/openrundev/bindings/mongodb
 
-go 1.26.6
+go 1.27.0
 
 require (
 	github.com/icholy/digest v1.1.0
