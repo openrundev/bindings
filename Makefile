@@ -10,7 +10,7 @@ MAKEFLAGS += --no-builtin-rules
 INPUT := $(word 2,$(MAKECMDGOALS))
 INPUT2 := $(word 3,$(MAKECMDGOALS))
 
-MODULES := mongodb sqlserver oracle databricks
+MODULES := clickhouse databricks mongodb oracle snowflake sqlserver
 SDK_MODULE := github.com/openrundev/openrun/pkg/binding
 # Set PUSH=1 to have `make release` push the commit and tags (used by the
 # openrun repo's fullrelease target); default only creates them locally.
@@ -22,7 +22,7 @@ ifeq ($(origin .RECIPEPREFIX), undefined)
 endif
 .RECIPEPREFIX = >
 
-.PHONY: help test unit int lint release tags
+.PHONY: help test unit int lint modules release tags
 
 help: ## Display this help section
 > @awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_-]+:.*?## / {printf "\033[36m%-38s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -49,8 +49,11 @@ int: ## Run integration tests; optional arg: provider name, e.g. `make int mongo
 
 tags: ## Show the latest release tag of each provider
 > @for m in $(MODULES); do
->   echo "$$m: $$(git tag -l "$$m/v*" --sort=-creatordate | head -n 1)"
+>   echo "$$m: $$(git tag -l "$$m/v*" --sort=-version:refname | head -n 1)"
 > done
+
+modules: ## Print provider module names for release orchestration
+> @echo "$(MODULES)"
 
 release: ## Tag a release (add PUSH=1 to also push); args: <sdk_version> <bindings_version>, e.g. `make release v0.2.0 v0.1.0`
 > @if [[ -z "$(INPUT)" || -z "$(INPUT2)" ]]; then
@@ -67,6 +70,18 @@ release: ## Tag a release (add PUSH=1 to also push); args: <sdk_version> <bindin
 > if [[ -n "$$(git status --porcelain)" ]]; then
 >   echo "Error: working tree is not clean, commit or stash changes first"
 >   exit 1
+> fi
+> if [[ "$(PUSH)" == "1" ]]; then
+>   branch="$$(git branch --show-current)"
+>   if [[ "$$branch" != "main" ]]; then
+>     echo "Error: bindings release must run from main (currently '$$branch')"
+>     exit 1
+>   fi
+>   git fetch --quiet --prune --tags origin
+>   if [[ "$$(git rev-parse HEAD)" != "$$(git rev-parse refs/remotes/origin/main)" ]]; then
+>     echo "Error: bindings main is not synchronized with origin/main"
+>     exit 1
+>   fi
 > fi
 > for m in $(MODULES); do
 >   if git rev-parse -q --verify "refs/tags/$$m/$(INPUT2)" > /dev/null; then
@@ -92,7 +107,7 @@ release: ## Tag a release (add PUSH=1 to also push); args: <sdk_version> <bindin
 >   release_tags="$$release_tags $$m/$(INPUT2)"
 > done
 > if [[ "$(PUSH)" == "1" ]]; then
->   git push origin HEAD
+>   git push origin HEAD:main
 >   # One push per tag: GitHub does not deliver push events (so the release
 >   # workflow does not run) when more than three tags are pushed at once
 >   for t in $$release_tags; do

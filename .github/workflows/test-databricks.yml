@@ -7,11 +7,6 @@ on:
       - "databricks/**"
       - "tests/**"
       - ".github/workflows/test-databricks.yml"
-  pull_request:
-    paths:
-      - "databricks/**"
-      - "tests/**"
-      - ".github/workflows/test-databricks.yml"
   workflow_dispatch:
 
 permissions:
@@ -27,14 +22,10 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    env:
-      TEST_DATABRICKS_HOST: ${{ secrets.TEST_DATABRICKS_HOST }}
-      TEST_DATABRICKS_HTTP_PATH: ${{ secrets.TEST_DATABRICKS_HTTP_PATH }}
-      TEST_DATABRICKS_TOKEN: ${{ secrets.TEST_DATABRICKS_TOKEN }}
-      TEST_DATABRICKS_CATALOG: ${{ secrets.TEST_DATABRICKS_CATALOG }}
+    timeout-minutes: 60
     steps:
       - name: Checkout bindings
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           path: bindings
           persist-credentials: false
@@ -43,7 +34,7 @@ jobs:
       # drive; the pkg/binding SDK resolves from the published module.
       - name: Checkout openrun
         id: openrun
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: openrundev/openrun
           path: openrun
@@ -51,7 +42,7 @@ jobs:
 
       - name: Setup Go
         id: go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: bindings/databricks/go.mod
           cache: true
@@ -67,6 +58,11 @@ jobs:
 
       - name: Check integration prerequisites
         id: prereq
+        env:
+          TEST_DATABRICKS_HOST: ${{ secrets.TEST_DATABRICKS_HOST }}
+          TEST_DATABRICKS_HTTP_PATH: ${{ secrets.TEST_DATABRICKS_HTTP_PATH }}
+          TEST_DATABRICKS_TOKEN: ${{ secrets.TEST_DATABRICKS_TOKEN }}
+          TEST_DATABRICKS_CATALOG: ${{ secrets.TEST_DATABRICKS_CATALOG }}
         run: |
           run=true
           if [[ -z "$TEST_DATABRICKS_HOST" || -z "$TEST_DATABRICKS_HTTP_PATH" || -z "$TEST_DATABRICKS_TOKEN" ]]; then
@@ -81,12 +77,17 @@ jobs:
       - name: Integration tests (provider lifecycle)
         if: steps.prereq.outputs.run == 'true'
         working-directory: bindings/databricks
+        env:
+          TEST_DATABRICKS_HOST: ${{ secrets.TEST_DATABRICKS_HOST }}
+          TEST_DATABRICKS_HTTP_PATH: ${{ secrets.TEST_DATABRICKS_HTTP_PATH }}
+          TEST_DATABRICKS_TOKEN: ${{ secrets.TEST_DATABRICKS_TOKEN }}
+          TEST_DATABRICKS_CATALOG: ${{ secrets.TEST_DATABRICKS_CATALOG }}
         run: go test -run TestIntegrationDatabricksLifecycle -v -timeout 15m
 
       - name: Cache OpenRun server
         if: steps.prereq.outputs.run == 'true'
         id: openrun-cache
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ~/.cache/openrun-ci/openrun
           key: openrun-server-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.openrun.outputs.commit }}
@@ -101,7 +102,7 @@ jobs:
       - name: Cache commander
         if: steps.prereq.outputs.run == 'true'
         id: commander-cache
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ~/go/bin/commander
           key: commander-${{ runner.os }}-${{ runner.arch }}-go-${{ steps.go.outputs.go-version }}-v2.5.0
@@ -115,4 +116,9 @@ jobs:
       - name: Integration tests (RPC layer)
         if: steps.prereq.outputs.run == 'true'
         working-directory: bindings
+        env:
+          TEST_DATABRICKS_HOST: ${{ secrets.TEST_DATABRICKS_HOST }}
+          TEST_DATABRICKS_HTTP_PATH: ${{ secrets.TEST_DATABRICKS_HTTP_PATH }}
+          TEST_DATABRICKS_TOKEN: ${{ secrets.TEST_DATABRICKS_TOKEN }}
+          TEST_DATABRICKS_CATALOG: ${{ secrets.TEST_DATABRICKS_CATALOG }}
         run: OPENRUN_SRC="$GITHUB_WORKSPACE/openrun" OPENRUN_TEST_SERVER_BIN="$HOME/.cache/openrun-ci/openrun" ./tests/run_int_tests.sh databricks

@@ -17,17 +17,23 @@ on:
       - "snowflake/v*"
       - "clickhouse/v*"
 
-permissions:
-  contents: write
-  packages: write
-  actions: read # SignPath downloads the unsigned artifact with the workflow token
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      packages: write
+      actions: read # SignPath downloads the unsigned artifact with the workflow token
     steps:
       - name: Checkout bindings
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           path: bindings
           persist-credentials: false
@@ -37,11 +43,19 @@ jobs:
         run: |
           PROVIDER="${GITHUB_REF_NAME%%/*}"
           VERSION="${GITHUB_REF_NAME#*/}"
+          case "$PROVIDER" in
+            mongodb|databricks|sqlserver|oracle|snowflake|clickhouse) ;;
+            *) echo "::error::Unsupported provider in release tag: $PROVIDER"; exit 1 ;;
+          esac
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release version must be vMAJOR.MINOR.PATCH: $VERSION"
+            exit 1
+          fi
           echo "provider=$PROVIDER" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: bindings/${{ steps.tag.outputs.provider }}/go.mod
           cache-dependency-path: bindings/${{ steps.tag.outputs.provider }}/go.sum
@@ -84,7 +98,7 @@ jobs:
       - name: Upload unsigned Windows binary
         if: vars.SIGNPATH_PROJECT_SLUG != ''
         id: upload-unsigned
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-unsigned
           path: ${{ runner.temp }}/unsigned/openrun-binding.exe
@@ -94,7 +108,7 @@ jobs:
 
       - name: Sign Windows binary with SignPath
         if: vars.SIGNPATH_PROJECT_SLUG != ''
-        uses: signpath/github-action-submit-signing-request@v2
+        uses: signpath/github-action-submit-signing-request@b9d91eadd323de506c0c81cf0c7fe7438f3360fd # v2.2
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: 7825b39c-bb11-4b89-9458-997088c35878
@@ -119,7 +133,7 @@ jobs:
         run: sha256sum -- * > SHA256SUMS && cat SHA256SUMS
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           name: "${{ steps.tag.outputs.provider }} ${{ steps.tag.outputs.version }}"
           files: |
@@ -144,20 +158,20 @@ jobs:
           cat Dockerfile
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ github.token }}
 
       - name: Build and push provider image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: bindings/dist
           platforms: linux/amd64,linux/arm64
