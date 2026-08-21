@@ -25,7 +25,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout bindings
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: bindings
           persist-credentials: false
@@ -34,7 +34,7 @@ jobs:
       # drive; the pkg/binding SDK resolves from the published module.
       - name: Checkout openrun
         id: openrun
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: openrundev/openrun
           path: openrun
@@ -42,7 +42,7 @@ jobs:
 
       - name: Setup Go
         id: go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: bindings/databricks/go.mod
           cache: true
@@ -87,7 +87,7 @@ jobs:
       - name: Cache OpenRun server
         if: steps.prereq.outputs.run == 'true'
         id: openrun-cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/openrun-ci/openrun
           key: openrun-server-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.openrun.outputs.commit }}
@@ -102,7 +102,7 @@ jobs:
       - name: Cache commander
         if: steps.prereq.outputs.run == 'true'
         id: commander-cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/go/bin/commander
           key: commander-${{ runner.os }}-${{ runner.arch }}-go-${{ steps.go.outputs.go-version }}-v2.5.0
