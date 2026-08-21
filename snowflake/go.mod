@@ -3,7 +3,7 @@ module github.com/openrundev/bindings/snowflake
 go 1.26.6
 
 require (
-	github.com/openrundev/openrun/pkg/binding v0.19.0
+	github.com/openrundev/openrun/pkg/binding v0.19.1
 	github.com/snowflakedb/gosnowflake v1.19.1
 )
 
