@@ -12,6 +12,8 @@ INPUT2 := $(word 3,$(MAKECMDGOALS))
 
 MODULES := clickhouse databricks mongodb oracle snowflake sqlserver
 SDK_MODULE := github.com/openrundev/openrun/pkg/binding
+GOLANGCI_LINT_VERSION := v2.13.1
+GOLANGCI_LINT = GOWORK=off go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 # Set PUSH=1 to have `make release` push the commit and tags (used by the
 # openrun repo's fullrelease target); default only creates them locally.
 PUSH ?=
@@ -41,7 +43,7 @@ unit: ## Run unit tests for all provider modules
 lint: ## Run lint for all provider modules
 > for m in $(MODULES); do
 >   echo "--- $$m"
->   (cd $$m && GOWORK=off golangci-lint run ./...)
+>   (cd $$m && $(GOLANGCI_LINT) run ./...)
 > done
 
 int: ## Run integration tests; optional arg: provider name, e.g. `make int mongodb` (default all)
