@@ -1,0 +1,163 @@
+config:
+  env:
+    CL_CONFIG_FILE: ${CL_CONFIG_FILE}
+    OPENRUN_BIN: ${OPENRUN_BIN}
+    CLICKHOUSE_PROVIDER_BIN: ${CLICKHOUSE_PROVIDER_BIN}
+    PATH: ${PATH}
+    TEST_CLICKHOUSE_URL: ${TEST_CLICKHOUSE_URL}
+
+tests:
+  clickhouse0000a: # provider install from a local binary registers it in the DB (RPC layer from here on)
+    command: ${OPENRUN_BIN} provider install clickhouse --source-url ${CLICKHOUSE_PROVIDER_BIN}
+    stdout: "Provider clickhouse dev installed"
+    exit-code: 0
+
+  clickhouse0000b: # provider list shows the served service types
+    command: ${OPENRUN_BIN} provider list -f json | jq -r '.[] | select(.name=="clickhouse") | .service_types | join(",")'
+    stdout: "clickhouse"
+
+  clickhouse0001: # the url is quoted: a valid DSN can contain & separating query parameters
+    command: ${OPENRUN_BIN} service create --config "url=${TEST_CLICKHOUSE_URL}" clickhouse/ch1
+    stdout: "Service clickhouse/ch1 created"
+    exit-code: 0
+
+  clickhouse0010:
+    command: ${OPENRUN_BIN} binding create clickhouse/ch1 /apps/ch1
+    stdout: "Binding /apps/ch1 created"
+    exit-code: 0
+
+  clickhouse0010a: # account url points at the generated database with the generated user
+    command: ${OPENRUN_BIN} binding show-account /apps/ch1 | jq -r '.url | contains("cl_usr_prd_") and contains("/cl_db_prd_")'
+    stdout: "true"
+
+  clickhouse0011: # prod and staging accounts use different databases
+    command: bash -c 'prod=$(${OPENRUN_BIN} binding run-command /apps/ch1 "select currentDatabase() as db" | jq -r ".rows[0].db"); stage=$(${OPENRUN_BIN} binding run-command --staging /apps/ch1 "select currentDatabase() as db" | jq -r ".rows[0].db"); [[ "$prod" != "$stage" && -n "$prod" ]] && echo true'
+    stdout: "true"
+
+  clickhouse0020: # table-specific grant can be created before the table exists
+    command: ${OPENRUN_BIN} binding create --grant "read:test1" /apps/ch1 /apps/ch1partialread
+    stdout: "Binding /apps/ch1partialread created"
+
+  clickhouse0021: # before creation, the target table is absent ("Unknown table expression" on current versions; older ones spell it differently but all include "Unknown table")
+    command: ${OPENRUN_BIN} binding run-command /apps/ch1partialread "select count(*) as n from test1"
+    stderr: "Unknown table"
+    exit-code: 1
+
+  clickhouse0030:
+    command: ${OPENRUN_BIN} binding run-command /apps/ch1 "create table test1 (id Int32, note String) ORDER BY id"
+    stdout: '"command_tag": "CREATE"'
+
+  clickhouse0031:
+    command: ${OPENRUN_BIN} binding run-command /apps/ch1 "insert into test1 values (1, 'base')"
+    stdout: '"command_tag": "INSERT"'
+
+  clickhouse0032: # deferred table grant is not applied until the binding is updated
+    command: ${OPENRUN_BIN} binding run-command /apps/ch1partialread "select count(*) as n from test1"
+    stderr: "Not enough privileges"
+    exit-code: 1
+
+  clickhouse0033:
+    command: ${OPENRUN_BIN} binding update --promote /apps/ch1partialread
+    stdout: "Binding /apps/ch1partialread updated"
+
+  clickhouse0034:
+    command: ${OPENRUN_BIN} binding run-command /apps/ch1partialread "select count(*) as n from test1" | jq -r '.rows[0].n'
+    stdout: "1"
+
+  clickhouse0035: # read grant does not allow writes
+    command: ${OPENRUN_BIN} binding run-command /apps/ch1partialread "insert into test1 values (2, 'denied')"
+    stderr: "Not enough privileges"
+    exit-code: 1
+
+  clickhouse0040: # database-wide full grant covers existing and future tables
+    command: ${OPENRUN_BIN} binding create --grant "full:*" /apps/ch1 /apps/ch1full
+    stdout: "Binding /apps/ch1full created"
+
+  clickhouse0041:
+    command: ${OPENRUN_BIN} binding run-command /apps/ch1full "insert into test1 values (3, 'derived')"
+    stdout: '"command_tag": "INSERT"'
+
+  clickhouse0041a: # full grant includes create privileges on the database
+    command: ${OPENRUN_BIN} binding run-command /apps/ch1full "create table full_created (id Int32) ORDER BY id"
+    stdout: '"command_tag": "CREATE"'
+
+  clickhouse0042: # db.* grants cover tables created after the grant
+    command: bash -c '${OPENRUN_BIN} binding run-command /apps/ch1 "create table test2 (id Int32) ORDER BY id" >/dev/null && ${OPENRUN_BIN} binding run-command /apps/ch1full "insert into test2 values (1)" | jq -r ".command_tag"'
+    stdout: "INSERT"
+
+  clickhouse0043: # mutations fall under ALTER, which full includes
+    command: ${OPENRUN_BIN} binding run-command /apps/ch1full "delete from test1 where id = 3"
+    stdout: '"command_tag": "DELETE"'
+
+  clickhouse0050: # revoking the full grant removes write access again
+    command: ${OPENRUN_BIN} binding update --delete-grant "full:*" --promote /apps/ch1full
+    stdout: "Binding /apps/ch1full updated"
+
+  clickhouse0051:
+    command: ${OPENRUN_BIN} binding run-command /apps/ch1full "insert into test1 values (4, 'revoked')"
+    stderr: "Not enough privileges"
+    exit-code: 1
+
+  clickhouse0100: # service and binding health checks connect and run a noop query
+    command: |
+      ${OPENRUN_BIN} service health clickhouse/ch1 >/dev/null
+      ${OPENRUN_BIN} binding health /apps/ch1 >/dev/null
+      ${OPENRUN_BIN} binding health --staging /apps/ch1 >/dev/null && echo healthy_all
+    stdout: "healthy_all"
+
+  clickhouse0101: # binding health fails after the user is dropped out-of-band; the staging account is unaffected
+    command: |
+      chbase=$(printf '%s' "$TEST_CLICKHOUSE_URL" | sed -E 's|^(https?://[^/?]*).*|\1/|')
+      ${OPENRUN_BIN} binding create clickhouse/ch1 /apps/chhealth >/dev/null
+      u=$(${OPENRUN_BIN} binding show-account /apps/chhealth | jq -r '.user')
+      curl -sS "$chbase" --data "DROP USER IF EXISTS $u" >/dev/null
+      if ${OPENRUN_BIN} binding health /apps/chhealth >/dev/null 2>&1; then prod=healthy; else prod=unhealthy; fi
+      ${OPENRUN_BIN} binding health --staging /apps/chhealth >/dev/null && echo "prod_${prod}/staging_healthy"
+    stdout: "prod_unhealthy/staging_healthy"
+
+  clickhouse0102: # the binding still deletes cleanly (dropping the missing user is harmless)
+    command: ${OPENRUN_BIN} binding delete /apps/chhealth
+    stdout: "Binding /apps/chhealth deleted"
+
+  # chq: run an admin query over the clickhouse HTTP interface. The admin
+  # credentials ride in TEST_CLICKHOUSE_URL (http(s) for both the container
+  # harness and ClickHouse Cloud); the DSN path/query is stripped for curl.
+  clickhouse0200: # deleting a derived binding drops its prod and staging users and roles on the server
+    command: |
+      chbase=$(printf '%s' "$TEST_CLICKHOUSE_URL" | sed -E 's|^(https?://[^/?]*).*|\1/|')
+      prod_acct=$(${OPENRUN_BIN} binding show-account /apps/ch1partialread)
+      stg_acct=$(${OPENRUN_BIN} binding show-account --staging /apps/ch1partialread)
+      prod_user=$(printf '%s' "$prod_acct" | jq -r '.user'); prod_role=$(printf '%s' "$prod_acct" | jq -r '.role')
+      stg_user=$(printf '%s' "$stg_acct" | jq -r '.user'); stg_role=$(printf '%s' "$stg_acct" | jq -r '.role')
+      ${OPENRUN_BIN} binding delete /apps/ch1partialread >/dev/null
+      curl -sS "$chbase" --data "SELECT (SELECT count() FROM system.users WHERE name IN ('$prod_user', '$stg_user')) + (SELECT count() FROM system.roles WHERE name IN ('$prod_role', '$stg_role'))"
+    stdout: "0"
+
+  clickhouse0201: # the base binding's database and data are untouched by the derived delete
+    command: ${OPENRUN_BIN} binding run-command /apps/ch1 "select count(*) as n from test1" | jq -r '.rows[0].n'
+    stdout: "1"
+
+  clickhouse0210: # deleting a base binding drops its databases (with contents), users and roles
+    command: |
+      ${OPENRUN_BIN} binding create clickhouse/ch1 /apps/chdelbase >/dev/null
+      prod_acct=$(${OPENRUN_BIN} binding show-account /apps/chdelbase)
+      stg_acct=$(${OPENRUN_BIN} binding show-account --staging /apps/chdelbase)
+      prod_user=$(printf '%s' "$prod_acct" | jq -r '.user'); prod_role=$(printf '%s' "$prod_acct" | jq -r '.role'); prod_db=$(printf '%s' "$prod_acct" | jq -r '.database')
+      stg_user=$(printf '%s' "$stg_acct" | jq -r '.user'); stg_role=$(printf '%s' "$stg_acct" | jq -r '.role'); stg_db=$(printf '%s' "$stg_acct" | jq -r '.database')
+      ${OPENRUN_BIN} binding run-command /apps/chdelbase "create table del_data (id Int32) ORDER BY id" >/dev/null
+      ${OPENRUN_BIN} binding delete /apps/chdelbase >/dev/null
+      chbase=$(printf '%s' "$TEST_CLICKHOUSE_URL" | sed -E 's|^(https?://[^/?]*).*|\1/|')
+      curl -sS "$chbase" --data "SELECT (SELECT count() FROM system.users WHERE name IN ('$prod_user', '$stg_user')) + (SELECT count() FROM system.roles WHERE name IN ('$prod_role', '$stg_role')) + (SELECT count() FROM system.databases WHERE name IN ('$prod_db', '$stg_db'))"
+    stdout: "0"
+
+  clickhouse9990: # uninstall is refused while services of the provider types exist
+    command: ${OPENRUN_BIN} provider uninstall clickhouse
+    stderr: "service(s) exist"
+    exit-code: 1
+
+  clickhouse9999: # remove the remaining bindings and the service so uninstall is allowed; binding delete also drops the generated roles/users/databases on the backend (bindings created by older OpenRun versions without recorded artifacts are cleaned up externally)
+    command: (${OPENRUN_BIN} binding delete /apps/ch1full; ${OPENRUN_BIN} binding delete /apps/ch1; ${OPENRUN_BIN} service delete clickhouse/ch1) || true
+
+  clickhouse9999a: # uninstall succeeds once the services are deleted
+    command: ${OPENRUN_BIN} provider uninstall clickhouse
+    stdout: "Provider clickhouse uninstalled"
