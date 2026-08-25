@@ -1,0 +1,82 @@
+name: Test mongodb integration
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "mongodb/**"
+      - "tests/**"
+      - ".github/workflows/test-mongodb.yml"
+  pull_request:
+    paths:
+      - "mongodb/**"
+      - "tests/**"
+      - ".github/workflows/test-mongodb.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout bindings
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: bindings
+          persist-credentials: false
+
+      # The openrun checkout builds the server binary the integration tests
+      # drive; the pkg/binding SDK resolves from the published module.
+      - name: Checkout openrun
+        id: openrun
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openrundev/openrun
+          path: openrun
+          persist-credentials: false
+
+      - name: Setup Go
+        id: go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: bindings/mongodb/go.mod
+          cache: true
+          cache-dependency-path: |
+            bindings/mongodb/go.sum
+            openrun/go.sum
+
+      - name: Cache OpenRun server
+        id: openrun-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/openrun-ci/openrun
+          key: openrun-server-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.openrun.outputs.commit }}
+
+      - name: Build OpenRun server
+        if: steps.openrun-cache.outputs.cache-hit != 'true'
+        working-directory: openrun
+        run: |
+          mkdir -p "$HOME/.cache/openrun-ci"
+          go build -o "$HOME/.cache/openrun-ci/openrun" ./cmd/openrun
+
+      - name: Cache commander
+        id: commander-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/bin/commander
+          key: commander-${{ runner.os }}-${{ runner.arch }}-go-${{ steps.go.outputs.go-version }}-v2.5.0
+
+      - name: Install commander
+        if: steps.commander-cache.outputs.cache-hit != 'true'
+        run: go install github.com/commander-cli/commander/v2/cmd/commander@v2.5.0
+
+      - name: Integration tests (RPC layer)
+        working-directory: bindings
+        run: OPENRUN_SRC="$GITHUB_WORKSPACE/openrun" OPENRUN_TEST_SERVER_BIN="$HOME/.cache/openrun-ci/openrun" ./tests/run_int_tests.sh mongodb

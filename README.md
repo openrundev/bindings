@@ -94,9 +94,12 @@ creates are cleaned up externally (with the container they vanish with it).
 
 ## CI
 
-Each provider has its own workflow (`.github/workflows/test-<provider>.yml`),
-path-filtered so a change to one provider only builds and tests that provider.
-Each workflow runs the module's unit tests and the RPC-layer integration suite
+The `CI` workflow vets, tests, and builds every provider module, and checks
+documentation links, on every branch push and pull request. Provider-specific
+workflows (`.github/workflows/test-<provider>.yml`) run the RPC-layer integration
+suites on `main`; MongoDB, Oracle, and SQL Server also run on relevant pull
+requests. Credential-backed Databricks and Snowflake integration tests run when
+their repository secrets are configured.
 
 ## Releasing
 

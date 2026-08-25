@@ -1,10 +1,12 @@
 *.tmp
+*.swp
 openrun-binding-*
 go.work
 go.work.sum
 tests/run/
 # per-module go build outputs (named after the directory)
 clickhouse/clickhouse
+databricks/databricks
 mongodb/mongodb
 sqlserver/sqlserver
 oracle/oracle

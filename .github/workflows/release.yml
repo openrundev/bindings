@@ -1,0 +1,184 @@
+name: Release
+
+# Releases one provider when its tag is pushed. Tags are of the form
+# <provider>/vX.Y.Z, e.g.:
+#   git tag mongodb/v0.1.0 && git push origin mongodb/v0.1.0
+# The release contains per-platform binaries named
+# openrun-binding-<provider>-<os>-<arch>[.exe] plus a SHA256SUMS file, matching
+# the `openrun provider install` source-url template:
+#   https://github.com/openrundev/bindings/releases/download/<provider>%2F{version}/openrun-binding-<provider>-{os}-{arch}
+on:
+  push:
+    tags:
+      - "mongodb/v*"
+      - "databricks/v*"
+      - "sqlserver/v*"
+      - "oracle/v*"
+      - "snowflake/v*"
+      - "clickhouse/v*"
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      packages: write
+      actions: read # SignPath downloads the unsigned artifact with the workflow token
+    steps:
+      - name: Checkout bindings
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: bindings
+          persist-credentials: false
+
+      - name: Parse tag
+        id: tag
+        run: |
+          PROVIDER="${GITHUB_REF_NAME%%/*}"
+          VERSION="${GITHUB_REF_NAME#*/}"
+          case "$PROVIDER" in
+            mongodb|databricks|sqlserver|oracle|snowflake|clickhouse) ;;
+            *) echo "::error::Unsupported provider in release tag: $PROVIDER"; exit 1 ;;
+          esac
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release version must be vMAJOR.MINOR.PATCH: $VERSION"
+            exit 1
+          fi
+          echo "provider=$PROVIDER" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: bindings/${{ steps.tag.outputs.provider }}/go.mod
+          cache-dependency-path: bindings/${{ steps.tag.outputs.provider }}/go.sum
+
+      - name: Unit tests
+        working-directory: bindings/${{ steps.tag.outputs.provider }}
+        run: go test ./...
+
+      - name: Build release binaries
+        working-directory: bindings/${{ steps.tag.outputs.provider }}
+        env:
+          PROVIDER: ${{ steps.tag.outputs.provider }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          mkdir -p ../dist
+          for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            export GOOS="${platform%/*}" GOARCH="${platform#*/}"
+            out="../dist/openrun-binding-${PROVIDER}-${GOOS}-${GOARCH}"
+            if [[ "$GOOS" == "windows" ]]; then out="${out}.exe"; fi
+            echo "Building $out"
+            CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "$out" .
+          done
+
+      # Authenticode-sign the Windows binary via SignPath: the certificate
+      # lives in SignPath's HSM, so signing is a round-trip — upload the
+      # unsigned exe as a workflow artifact, SignPath signs it, download the
+      # signed copy and put it back in dist before checksums are computed.
+      # Skipped unless the SIGNPATH_PROJECT_SLUG repository variable is set
+      # (the OSS subscription allows one project, currently used by the
+      # openrun repo; set the variable once SignPath grants this repo one).
+      - name: Stage Windows binary for signing
+        if: vars.SIGNPATH_PROJECT_SLUG != ''
+        env:
+          PROVIDER: ${{ steps.tag.outputs.provider }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/unsigned"
+          # fixed file name so one SignPath artifact configuration covers all providers
+          cp "bindings/dist/openrun-binding-${PROVIDER}-windows-amd64.exe" "$RUNNER_TEMP/unsigned/openrun-binding.exe"
+
+      - name: Upload unsigned Windows binary
+        if: vars.SIGNPATH_PROJECT_SLUG != ''
+        id: upload-unsigned
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-unsigned
+          path: ${{ runner.temp }}/unsigned/openrun-binding.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - name: Sign Windows binary with SignPath
+        if: vars.SIGNPATH_PROJECT_SLUG != ''
+        uses: signpath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2.3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: 7825b39c-bb11-4b89-9458-997088c35878
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          # set the SIGNPATH_SIGNING_POLICY_SLUG repository variable to
+          # "test-signing" to sign with the self-signed test certificate
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          # leave room for manual approval of the signing request
+          wait-for-completion-timeout-in-seconds: "1800"
+          output-artifact-directory: ${{ runner.temp }}/signed
+
+      - name: Replace Windows binary with signed copy
+        if: vars.SIGNPATH_PROJECT_SLUG != ''
+        env:
+          PROVIDER: ${{ steps.tag.outputs.provider }}
+        run: cp "$RUNNER_TEMP/signed/openrun-binding.exe" "bindings/dist/openrun-binding-${PROVIDER}-windows-amd64.exe"
+
+      - name: Generate checksums
+        working-directory: bindings/dist
+        run: sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@fe965f7af51af5f2602596916f38a38df2e33de0 # v3.0.2
+        with:
+          name: "${{ steps.tag.outputs.provider }} ${{ steps.tag.outputs.version }}"
+          files: |
+            bindings/dist/*
+
+      # OCI distribution path: a FROM-scratch image per provider, consumed by
+      # the Helm chart's bindings.images init containers (the init container
+      # runs the binary's `export` subcommand to copy it into the shared
+      # volume the server discovers via bindings.preinstalled_dir).
+      - name: Generate provider image Dockerfile
+        working-directory: bindings/dist
+        env:
+          PROVIDER: ${{ steps.tag.outputs.provider }}
+        run: |
+          cat > Dockerfile <<EOF
+          FROM scratch
+          ARG TARGETOS
+          ARG TARGETARCH
+          COPY openrun-binding-${PROVIDER}-\${TARGETOS}-\${TARGETARCH} /openrun-binding-${PROVIDER}
+          ENTRYPOINT ["/openrun-binding-${PROVIDER}"]
+          EOF
+          cat Dockerfile
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push provider image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: bindings/dist
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/openrun-binding-${{ steps.tag.outputs.provider }}:${{ steps.tag.outputs.version }}
+          labels: |
+            org.opencontainers.image.title=openrun-binding-${{ steps.tag.outputs.provider }}
+            org.opencontainers.image.description=OpenRun ${{ steps.tag.outputs.provider }} binding provider
+            org.opencontainers.image.version=${{ steps.tag.outputs.version }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}

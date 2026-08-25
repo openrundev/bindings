@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test ${{ matrix.provider }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [clickhouse, databricks, mongodb, oracle, snowflake, sqlserver]
+    steps:
+      - name: Checkout bindings
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ matrix.provider }}/go.mod
+          cache-dependency-path: ${{ matrix.provider }}/go.sum
+
+      - name: Vet
+        working-directory: ${{ matrix.provider }}
+        run: GOWORK=off go vet ./...
+
+      - name: Test
+        working-directory: ${{ matrix.provider }}
+        run: GOWORK=off go test ./...
+
+      - name: Build
+        working-directory: ${{ matrix.provider }}
+        run: GOWORK=off go build ./...
+
+  links:
+    name: Check links
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout bindings
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check documentation links
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          args: --no-progress --verbose './**/*.md'
+          fail: true
+          failIfEmpty: true
+          jobSummary: true
+

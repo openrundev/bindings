@@ -1,0 +1,114 @@
+name: Test snowflake integration
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "snowflake/**"
+      - "tests/**"
+      - ".github/workflows/test-snowflake.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# The integration suite runs against one shared live Snowflake account, so
+# runs are serialized instead of cancelled: a cancelled run would leave
+# half-created services/bindings behind on the account.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  integration-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout bindings
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: bindings
+          persist-credentials: false
+
+      # The openrun checkout builds the server binary the integration tests
+      # drive; the pkg/binding SDK resolves from the published module.
+      - name: Checkout openrun
+        id: openrun
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openrundev/openrun
+          path: openrun
+          persist-credentials: false
+
+      - name: Setup Go
+        id: go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: bindings/snowflake/go.mod
+          cache: true
+          cache-dependency-path: |
+            bindings/snowflake/go.sum
+            openrun/go.sum
+
+      # The suite passes the admin credential through a {{secret_from}}
+      # service config reference, which needs the server-side secret
+      # expansion. Skip the integration run (with a notice) until the openrun
+      # checkout has it, so this workflow can merge ahead of that change.
+      - name: Check integration prerequisites
+        id: prereq
+        env:
+          TEST_SNOWFLAKE_ACCOUNT: ${{ secrets.TEST_SNOWFLAKE_ACCOUNT }}
+          TEST_SNOWFLAKE_USER: ${{ secrets.TEST_SNOWFLAKE_USER }}
+          # Key-pair auth is preferred; the password is a fallback for
+          # accounts where it is still accepted.
+          TEST_SNOWFLAKE_PRIVATE_KEY: ${{ secrets.TEST_SNOWFLAKE_PRIVATE_KEY }}
+          TEST_SNOWFLAKE_PASSWORD: ${{ secrets.TEST_SNOWFLAKE_PASSWORD }}
+        run: |
+          run=true
+          if [[ -z "$TEST_SNOWFLAKE_ACCOUNT" || ( -z "$TEST_SNOWFLAKE_PASSWORD" && -z "$TEST_SNOWFLAKE_PRIVATE_KEY" ) ]]; then
+            echo "::notice::TEST_SNOWFLAKE_* secrets not configured; skipping snowflake integration tests"
+            run=false
+          elif ! grep -q "resolveServiceConfig" openrun/internal/server/service_binding.go; then
+            echo "::notice::openrun checkout lacks service config secret expansion; skipping snowflake integration tests"
+            run=false
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+      - name: Cache OpenRun server
+        if: steps.prereq.outputs.run == 'true'
+        id: openrun-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/openrun-ci/openrun
+          key: openrun-server-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.openrun.outputs.commit }}
+
+      - name: Build OpenRun server
+        if: steps.prereq.outputs.run == 'true' && steps.openrun-cache.outputs.cache-hit != 'true'
+        working-directory: openrun
+        run: |
+          mkdir -p "$HOME/.cache/openrun-ci"
+          go build -o "$HOME/.cache/openrun-ci/openrun" ./cmd/openrun
+
+      - name: Cache commander
+        if: steps.prereq.outputs.run == 'true'
+        id: commander-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/bin/commander
+          key: commander-${{ runner.os }}-${{ runner.arch }}-go-${{ steps.go.outputs.go-version }}-v2.5.0
+
+      - name: Install commander
+        if: steps.prereq.outputs.run == 'true' && steps.commander-cache.outputs.cache-hit != 'true'
+        run: go install github.com/commander-cli/commander/v2/cmd/commander@v2.5.0
+
+      # There is no containerized Snowflake: the suite runs against the live
+      # test account configured through the TEST_SNOWFLAKE_* secrets.
+      - name: Integration tests (RPC layer)
+        if: steps.prereq.outputs.run == 'true'
+        working-directory: bindings
+        env:
+          TEST_SNOWFLAKE_ACCOUNT: ${{ secrets.TEST_SNOWFLAKE_ACCOUNT }}
+          TEST_SNOWFLAKE_USER: ${{ secrets.TEST_SNOWFLAKE_USER }}
+          TEST_SNOWFLAKE_PRIVATE_KEY: ${{ secrets.TEST_SNOWFLAKE_PRIVATE_KEY }}
+          TEST_SNOWFLAKE_PASSWORD: ${{ secrets.TEST_SNOWFLAKE_PASSWORD }}
+        run: OPENRUN_SRC="$GITHUB_WORKSPACE/openrun" OPENRUN_TEST_SERVER_BIN="$HOME/.cache/openrun-ci/openrun" ./tests/run_int_tests.sh snowflake
