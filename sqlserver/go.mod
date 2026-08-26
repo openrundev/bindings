@@ -4,7 +4,7 @@ go 1.27.0
 
 require (
 	github.com/microsoft/go-mssqldb v1.10.0
-	github.com/openrundev/openrun/pkg/binding v0.19.1
+	github.com/openrundev/openrun/pkg/binding v0.19.2
 )
 
 require (
