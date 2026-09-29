@@ -449,6 +449,14 @@ func (b *MongoServiceBinding) ApplyGrants(ctx context.Context, account map[strin
 			if !b.isAtlas && reapplyAll {
 				// After the role upsert, so the recreated user's role reference resolves
 				if err := b.restoreSelfHostedUser(ctx, account); err != nil {
+					// The role update has already committed. The SDK/server
+					// ignore results on error, so undo it before returning.
+					cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+					cleanupErr := b.setUserGrants(cleanupCtx, account, bindingMetadata.GrantsApplied)
+					cancel()
+					if cleanupErr != nil {
+						return errors.Join(err, fmt.Errorf("error rolling back role privileges: %w", cleanupErr))
+					}
 					return err
 				}
 			}

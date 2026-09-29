@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 
 	_ "github.com/microsoft/go-mssqldb"
 	binding "github.com/openrundev/openrun/pkg/binding"
@@ -165,7 +166,7 @@ func (b *SqlServerServiceBinding) GenerateAccount(ctx context.Context, bindingId
 	// Derived bindings get CONNECT implicitly from CREATE USER; application
 	// privileges are assigned only by ApplyGrants.
 
-	accountURL, accountDirectURL, err := binding.AccountURLs(b.serviceConfig["url"], loginName, password, b.serviceConfig["binding_hostname"])
+	accountURL, accountDirectURL, err := sqlserverAccountURLs(b.serviceConfig["url"], loginName, password, b.serviceConfig["binding_hostname"])
 	if err != nil {
 		return nil, artifacts, fmt.Errorf("error building account url: %w", err)
 	}
@@ -303,10 +304,10 @@ func (b *SqlServerServiceBinding) dropSchemaCascade(ctx context.Context, schemaN
 
 func (b *SqlServerServiceBinding) ApplyGrants(ctx context.Context, account map[string]string, bindingMetadata binding.BindingMetadata,
 	derivedFromMetadata binding.BindingMetadata, reapplyAll bool) (binding.GrantApplyResult, error) {
-	return binding.ApplyGrantsIncremental(bindingMetadata,
+	return binding.ApplyGrantsIncrementalSafe(ctx, bindingMetadata,
 		[]binding.GrantType{binding.GrantTypeRead, binding.GrantTypeCreate, binding.GrantTypeFull}, reapplyAll,
-		func(grants []binding.BindingGrant) ([]binding.BindingGrant, error) {
-			return b.applyPerms(ctx, "grant", grants, account["schema"], account["user"])
+		func(callCtx context.Context, op string, batch []binding.BindingGrant) ([]binding.BindingGrant, error) {
+			return b.applyPerms(callCtx, op, batch, account["schema"], account["user"])
 		})
 }
 
@@ -507,4 +508,23 @@ func (b *SqlServerServiceBinding) CheckHealth(ctx context.Context) error {
 // verifying the generated login/user still exist and their credentials work.
 func (b *SqlServerServiceBinding) CheckBindingHealth(ctx context.Context, bindingMetadata binding.BindingMetadata) error {
 	return sqlbinding.CheckBindingHealth(ctx, "sqlserver", bindingMetadata.Account[binding.AccountKeyURLDirect], "select 1")
+}
+
+// sqlserverAccountURLs removes alternate admin credentials before building the
+// application URL. The driver accepts credentials in case-insensitive query
+// parameters as well as userinfo; copying them leaks the service credentials.
+func sqlserverAccountURLs(adminURL, user, password, hostname string) (string, string, error) {
+	u, err := url.Parse(adminURL)
+	if err != nil {
+		return "", "", err
+	}
+	query := u.Query()
+	for key := range query {
+		switch strings.ToLower(key) {
+		case "user id", "user", "uid", "password", "pwd", "change password":
+			query.Del(key)
+		}
+	}
+	u.RawQuery = query.Encode()
+	return binding.AccountURLs(u.String(), user, password, hostname)
 }

@@ -4,6 +4,7 @@
 package main
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 
@@ -94,5 +95,34 @@ func TestOnClusterClause(t *testing.T) {
 func TestQuoteClickhouseIdent(t *testing.T) {
 	if got := quoteClickhouseIdent(`we"ird`); got != `"we""ird"` {
 		t.Fatalf("quoteClickhouseIdent = %q, want doubled quote", got)
+	}
+}
+
+func TestAccountURLsRemoveAdminQueryCredentials(t *testing.T) {
+	appURL, directURL, err := clickhouseAccountURLs("clickhouse://localhost:9000/default?username=admin&password=admin-secret&database=private&secure=true", "binding_user", "binding-password", "binding_db", "app-host")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{appURL, directURL} {
+		opts, err := clickhouse.ParseDSN(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if opts.Auth.Username != "binding_user" || opts.Auth.Password != "binding-password" || opts.Auth.Database != "binding_db" {
+			t.Fatalf("admin options survived: %+v", opts.Auth)
+		}
+		u, _ := url.Parse(raw)
+		if u.Query().Get("secure") != "true" {
+			t.Fatal("transport settings lost")
+		}
+		if strings.Contains(raw, "admin-secret") {
+			t.Fatal("admin password leaked")
+		}
+	}
+}
+
+func TestQuoteClickhouseIdentBackslash(t *testing.T) {
+	if got, want := quoteClickhouseIdent(`a\" ON *.* TO attacker --`), `"a\\"" ON *.* TO attacker --"`; got != want {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }

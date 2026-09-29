@@ -211,3 +211,15 @@ func TestGeneratedAccountDSNRoundTrip(t *testing.T) {
 		t.Fatalf("DSN round trip lost the private key")
 	}
 }
+
+func TestQuoteSnowflakeStringBackslash(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{`\' IN ACCOUNT --`, `'\\'' IN ACCOUNT --'`},
+		{`trailing\`, `'trailing\\'`},
+		{`it's`, `'it''s'`},
+	} {
+		if got := quoteSnowflakeString(tc.input); got != tc.want {
+			t.Fatalf("quote(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}

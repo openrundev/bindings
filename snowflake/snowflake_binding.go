@@ -283,10 +283,10 @@ func (b *SnowflakeServiceBinding) DeleteArtifact(ctx context.Context, artifact b
 
 func (b *SnowflakeServiceBinding) ApplyGrants(ctx context.Context, account map[string]string, bindingMetadata binding.BindingMetadata,
 	derivedFromMetadata binding.BindingMetadata, reapplyAll bool) (binding.GrantApplyResult, error) {
-	return binding.ApplyGrantsIncremental(bindingMetadata,
+	return binding.ApplyGrantsIncrementalSafe(ctx, bindingMetadata,
 		[]binding.GrantType{binding.GrantTypeRead, binding.GrantTypeCreate, binding.GrantTypeFull}, reapplyAll,
-		func(grants []binding.BindingGrant) ([]binding.BindingGrant, error) {
-			return b.applyPerms(ctx, "grant", grants, account["schema"], account["role"])
+		func(callCtx context.Context, op string, batch []binding.BindingGrant) ([]binding.BindingGrant, error) {
+			return b.applyPerms(callCtx, op, batch, account["schema"], account["role"])
 		})
 }
 
@@ -465,7 +465,7 @@ func (b *SnowflakeServiceBinding) resolveTableOrView(ctx context.Context, schema
 		// LIKE patterns are case-insensitive; matching the returned names
 		// exactly (or via uppercase normalization) avoids LIKE wildcard
 		// surprises from _ in table names.
-		query := "SHOW " + objectClass.keyword + " LIKE " + sqlbinding.QuoteStringSingle(target) + " IN SCHEMA " + quotedSchema
+		query := "SHOW " + objectClass.keyword + " LIKE " + quoteSnowflakeString(target) + " IN SCHEMA " + quotedSchema
 		rows, err := b.adminConn.QueryContext(ctx, query)
 		if err != nil {
 			return "", false, false, fmt.Errorf("error listing objects in schema %s: %w", schema, err)
@@ -561,4 +561,10 @@ func configKeys(serviceConfig map[string]string) []string {
 		keys = append(keys, key)
 	}
 	return keys
+}
+
+// Snowflake interprets backslash escapes in string literals. Escape them
+// before doubling quotes so an input backslash cannot escape the delimiter.
+func quoteSnowflakeString(value string) string {
+	return sqlbinding.QuoteStringSingle(strings.ReplaceAll(value, `\`, `\\`))
 }

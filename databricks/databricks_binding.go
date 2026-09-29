@@ -138,9 +138,8 @@ func (b *DatabricksServiceBinding) InitializeService(ctx context.Context, logger
 		adminDB.Close() //nolint:errcheck
 		return fmt.Errorf("error verifying databricks connection: %w", err)
 	}
-	catalogQuery := "SELECT 1 FROM system.information_schema.catalogs WHERE catalog_name = " +
-		sqlbinding.QuoteStringSingle(serviceConfig["catalog"])
-	row := adminDB.QueryRowContext(ctx, catalogQuery)
+	catalogQuery := "SELECT 1 FROM system.information_schema.catalogs WHERE catalog_name = ?"
+	row := adminDB.QueryRowContext(ctx, catalogQuery, serviceConfig["catalog"])
 	var one int
 	if err := row.Scan(&one); err != nil {
 		adminDB.Close() //nolint:errcheck
@@ -383,10 +382,10 @@ func (b *DatabricksServiceBinding) DeleteArtifact(ctx context.Context, artifact 
 
 func (b *DatabricksServiceBinding) ApplyGrants(ctx context.Context, account map[string]string, bindingMetadata binding.BindingMetadata,
 	derivedFromMetadata binding.BindingMetadata, reapplyAll bool) (binding.GrantApplyResult, error) {
-	return binding.ApplyGrantsIncremental(bindingMetadata,
+	return binding.ApplyGrantsIncrementalSafe(ctx, bindingMetadata,
 		[]binding.GrantType{binding.GrantTypeRead, binding.GrantTypeCreate, binding.GrantTypeFull}, reapplyAll,
-		func(grants []binding.BindingGrant) ([]binding.BindingGrant, error) {
-			return b.applyPerms(ctx, "grant", grants, account["schema"], account["client_id"])
+		func(callCtx context.Context, op string, batch []binding.BindingGrant) ([]binding.BindingGrant, error) {
+			return b.applyPerms(callCtx, op, batch, account["schema"], account["client_id"])
 		})
 }
 
@@ -532,9 +531,8 @@ func (b *DatabricksServiceBinding) applyPerms(ctx context.Context, operation str
 // lookup matches case-insensitively and returns the stored name.
 func (b *DatabricksServiceBinding) resolveTable(ctx context.Context, schema, target string) (string, bool, error) {
 	query := "SELECT table_name FROM " + quoteDatabricksIdent(b.serviceConfig["catalog"]) +
-		".information_schema.tables WHERE table_schema = " + sqlbinding.QuoteStringSingle(schema) +
-		" AND table_name = lower(" + sqlbinding.QuoteStringSingle(target) + ") LIMIT 1"
-	row := b.adminDB.QueryRowContext(ctx, query)
+		".information_schema.tables WHERE table_schema = ? AND table_name = lower(?) LIMIT 1"
+	row := b.adminDB.QueryRowContext(ctx, query, schema, target)
 	var name string
 	if err := row.Scan(&name); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

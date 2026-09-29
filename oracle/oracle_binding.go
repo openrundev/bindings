@@ -245,10 +245,10 @@ func (b *OracleServiceBinding) ApplyGrants(ctx context.Context, account map[stri
 	// The create grant type is excluded: Oracle has no schema-scoped create
 	// privilege before 23ai (only the database-wide CREATE ANY TABLE), so it
 	// cannot be supported safely.
-	return binding.ApplyGrantsIncremental(bindingMetadata,
+	return binding.ApplyGrantsIncrementalSafe(ctx, bindingMetadata,
 		[]binding.GrantType{binding.GrantTypeRead, binding.GrantTypeFull}, reapplyAll,
-		func(grants []binding.BindingGrant) ([]binding.BindingGrant, error) {
-			return b.applyPerms(ctx, "grant", grants, account["schema"], account["user"])
+		func(callCtx context.Context, op string, batch []binding.BindingGrant) ([]binding.BindingGrant, error) {
+			return b.applyPerms(callCtx, op, batch, account["schema"], account["user"])
 		})
 }
 
