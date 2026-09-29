@@ -14,8 +14,8 @@ MODULES := clickhouse databricks mongodb oracle snowflake sqlserver
 SDK_MODULE := github.com/openrundev/openrun/pkg/binding
 GOLANGCI_LINT_VERSION := v2.13.1
 GOLANGCI_LINT = GOWORK=off go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
-# Set PUSH=1 to have `make release` push the commit and tags (used by the
-# openrun repo's fullrelease target); default only creates them locally.
+# PUSH=1 makes `make release` push the commit and tags (the openrun repo's
+# fullrelease target sets it); by default they are only created locally.
 PUSH ?=
 
 .DEFAULT_GOAL := help
@@ -57,73 +57,88 @@ tags: ## Show the latest release tag of each provider
 modules: ## Print provider module names for release orchestration
 > @echo "$(MODULES)"
 
-release: ## Tag a release (add PUSH=1 to also push); args: <sdk_version> <bindings_version>, e.g. `make release v0.2.0 v0.1.0`
-> @if [[ -z "$(INPUT)" || -z "$(INPUT2)" ]]; then
->   echo "Usage: make release <sdk_version> <bindings_version>, e.g. make release v0.2.0 v0.1.0"
->   exit 1
-> fi
-> # Accept the openrun repo tag form (pkg/binding/vX.Y.Z) or the bare version
+# ---------------------------------------------------------------------------
+# Release
+#
+# Versions are given without the v prefix (e.g. 0.19.5); the tags add it.
+# The SDK version must already be published as tag pkg/binding/v<sdk_version>
+# in the openrun repo (`make release-sdk` or `make fullrelease` there): every
+# provider module is pinned to it and tidied against the published module,
+# which is what fails if the tag is missing.
+#
+#   make release <sdk_version> <bindings_version>         create the pin
+#                                                          commit and tags
+#   make release <sdk_version> <bindings_version> PUSH=1  also push them
+#
+# A pushed <provider>/v<version> tag triggers the release workflow, which
+# builds and publishes that provider's binaries and OCI image.
+# ---------------------------------------------------------------------------
+release: ## Pin every provider to a pkg/binding SDK version and tag each provider; args: <sdk_version> <bindings_version>, add PUSH=1 to push
+> @semver_re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$$'
 > sdk_version="$(INPUT)"
 > sdk_version="$${sdk_version#pkg/binding/}"
-> if [[ "$$sdk_version" != v* || "$(INPUT2)" != v* ]]; then
->   echo "Error: versions must start with v (got sdk '$$sdk_version', bindings '$(INPUT2)')"
->   exit 1
-> fi
+> sdk_version="$${sdk_version#v}"
+> version="$(INPUT2)"
+> version="$${version#v}"
+> for v in "$$sdk_version" "$$version"; do
+>   if ! [[ "$$v" =~ $$semver_re ]]; then
+>     echo "Usage: make release <sdk_version> <bindings_version> [PUSH=1], e.g. make release 0.19.5 0.19.5"
+>     echo "Error: '$$v' is not a version like 0.19.5 or 0.19.5-rc.1"
+>     exit 1
+>   fi
+> done
+> # Everything is tagged from the current checkout: require a clean tree, and
+> # when pushing, a main branch that is synchronized with origin/main
 > if [[ -n "$$(git status --porcelain)" ]]; then
->   echo "Error: working tree is not clean, commit or stash changes first"
+>   echo "Error: working tree has uncommitted changes, commit or stash them first"
 >   exit 1
 > fi
 > if [[ "$(PUSH)" == "1" ]]; then
->   branch="$$(git branch --show-current)"
->   if [[ "$$branch" != "main" ]]; then
->     echo "Error: bindings release must run from main (currently '$$branch')"
+>   if [[ "$$(git branch --show-current)" != "main" ]]; then
+>     echo "Error: a pushed release must run from main"
 >     exit 1
 >   fi
 >   git fetch --quiet --prune --tags origin
->   if [[ "$$(git rev-parse HEAD)" != "$$(git rev-parse refs/remotes/origin/main)" ]]; then
->     echo "Error: bindings main is not synchronized with origin/main"
+>   if [[ "$$(git rev-parse HEAD)" != "$$(git rev-parse origin/main)" ]]; then
+>     echo "Error: main is not synchronized with origin/main"
 >     exit 1
 >   fi
 > fi
 > for m in $(MODULES); do
->   if git rev-parse -q --verify "refs/tags/$$m/$(INPUT2)" > /dev/null; then
->     echo "Error: tag $$m/$(INPUT2) already exists"
+>   if git rev-parse -q --verify "refs/tags/$$m/v$$version" > /dev/null; then
+>     echo "Error: tag $$m/v$$version already exists"
 >     exit 1
 >   fi
 > done
-> # Update every module to the requested SDK version; tidy fails the release
-> # if the version is not published
+> # Pin every module to the SDK version; tidy fails if it is not published
 > for m in $(MODULES); do
->   echo "--- $$m: pkg/binding $$sdk_version"
->   (cd $$m && go mod edit -require=$(SDK_MODULE)@$$sdk_version && GOWORK=off go mod tidy)
+>   echo "--- $$m: pkg/binding v$$sdk_version"
+>   (cd $$m && go mod edit -require=$(SDK_MODULE)@v$$sdk_version && GOWORK=off go mod tidy)
 > done
 > if [[ -n "$$(git status --porcelain)" ]]; then
 >   git add $(foreach m,$(MODULES),$(m)/go.mod $(m)/go.sum)
->   git commit -m "Update pkg/binding to $$sdk_version for release $(INPUT2)"
+>   git commit -q -m "Update pkg/binding to v$$sdk_version for release v$$version"
 > else
->   echo "go.mod files already at pkg/binding $$sdk_version"
+>   echo "go.mod files already at pkg/binding v$$sdk_version"
 > fi
-> release_tags=""
+> tags=""
 > for m in $(MODULES); do
->   git tag -a "$$m/$(INPUT2)" -m "Release $$m/$(INPUT2)"
->   release_tags="$$release_tags $$m/$(INPUT2)"
+>   git tag -a "$$m/v$$version" -m "Release $$m/v$$version"
+>   tags="$$tags $$m/v$$version"
 > done
-> if [[ "$(PUSH)" == "1" ]]; then
->   git push origin HEAD:main
->   # One push per tag: GitHub does not deliver push events (so the release
->   # workflow does not run) when more than three tags are pushed at once
->   for t in $$release_tags; do
->     git push origin "$$t"
->   done
->   echo "Pushed$$release_tags; the release workflow now builds and publishes each provider"
-> else
->   echo "Created$$release_tags (not pushed); run: git push origin HEAD, then push each tag SEPARATELY"
->   echo "(one push per tag; GitHub skips push events when more than three tags are pushed at once):"
->   for t in $$release_tags; do
->     echo "  git push origin $$t"
->   done
->   echo "The release workflow then builds and publishes each provider"
+> if [[ "$(PUSH)" != "1" ]]; then
+>   echo "Created$$tags (not pushed). To publish, push main and then each tag separately:"
+>   echo "  git push origin HEAD"
+>   for t in $$tags; do echo "  git push origin $$t"; done
+>   exit 0
 > fi
+> git push origin HEAD:main
+> # One push per tag: GitHub delivers no push events (so the release workflow
+> # does not run) when more than three tags arrive in a single push
+> for t in $$tags; do
+>   git push origin "$$t"
+> done
+> echo "Pushed$$tags; the release workflow now builds and publishes each provider"
 
 # Swallow extra command line words used as arguments to targets (e.g. the
 # version arguments of `make release`)
