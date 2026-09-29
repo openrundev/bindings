@@ -6,6 +6,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/microsoft/go-mssqldb/msdsn"
 )
 
 func TestQuoteSqlserverIdent(t *testing.T) {
@@ -58,5 +60,26 @@ func TestSqlserverDatabaseFromURL(t *testing.T) {
 	// Unparsable URL
 	if _, err := sqlserverDatabaseFromURL("sqlserver://sa:pw@local host"); err == nil {
 		t.Fatal("expected parse error")
+	}
+}
+
+func TestSQLServerAccountURLsRemoveAdminCredentials(t *testing.T) {
+	for _, query := range []string{"user+id=sa&password=admin-secret", "UID=sa&PWD=admin-secret", "User=sa&Password=admin-secret&Change+Password=next-secret"} {
+		appURL, directURL, err := sqlserverAccountURLs("sqlserver://localhost:1433?database=appdb&encrypt=true&"+query, "binding_login", "binding-password", "app-host")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, raw := range []string{appURL, directURL} {
+			cfg, err := msdsn.Parse(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.User != "binding_login" || cfg.Password != "binding-password" || cfg.Database != "appdb" || cfg.ChangePassword != "" {
+				t.Fatalf("unexpected config: %+v", cfg)
+			}
+			if strings.Contains(raw, "admin-secret") || strings.Contains(raw, "next-secret") {
+				t.Fatal("admin secret leaked")
+			}
+		}
 	}
 }

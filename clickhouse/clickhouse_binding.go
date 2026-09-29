@@ -224,6 +224,13 @@ func clickhouseAccountURLs(adminURL, user, password, database, bindingHostname s
 	}
 	u.User = url.UserPassword(user, password)
 	u.Path = "/" + database
+	// The driver gives these query options precedence over URL userinfo/path.
+	// Never propagate the admin identity or database to an application account.
+	query := u.Query()
+	for _, key := range []string{"username", "password", "database"} {
+		query.Del(key)
+	}
+	u.RawQuery = query.Encode()
 	accountDirectURL = u.String()
 	binding.SetURLHostname(u, bindingHostname)
 	return u.String(), accountDirectURL, nil
@@ -257,10 +264,10 @@ func (b *ClickHouseServiceBinding) DeleteArtifact(ctx context.Context, artifact 
 
 func (b *ClickHouseServiceBinding) ApplyGrants(ctx context.Context, account map[string]string, bindingMetadata binding.BindingMetadata,
 	derivedFromMetadata binding.BindingMetadata, reapplyAll bool) (binding.GrantApplyResult, error) {
-	return binding.ApplyGrantsIncremental(bindingMetadata,
+	return binding.ApplyGrantsIncrementalSafe(ctx, bindingMetadata,
 		[]binding.GrantType{binding.GrantTypeRead, binding.GrantTypeCreate, binding.GrantTypeFull}, reapplyAll,
-		func(grants []binding.BindingGrant) ([]binding.BindingGrant, error) {
-			return b.applyPerms(ctx, "grant", grants, account["database"], account["role"])
+		func(callCtx context.Context, op string, batch []binding.BindingGrant) ([]binding.BindingGrant, error) {
+			return b.applyPerms(callCtx, op, batch, account["database"], account["role"])
 		})
 }
 
@@ -314,8 +321,13 @@ func (b *ClickHouseServiceBinding) applyPerms(ctx context.Context, operation str
 	}
 
 	// tableSpecific grants/revokes privs on one table or view, deferring the
-	// grant when the target does not exist yet (returns false, nil).
+	// grant when the target does not exist yet (returns false, nil). Revokes
+	// never defer: ClickHouse grants survive DROP TABLE, so a revoke must run
+	// by name even while the table is absent or recreating it restores access.
 	tableSpecific := func(target, privs string) (bool, error) {
+		if !isGrant {
+			return true, applyStmt(privs, quotedDB+"."+quoteClickhouseIdent(target))
+		}
 		exists, err := b.tableExists(ctx, database, target)
 		if err != nil {
 			return false, err
@@ -330,13 +342,8 @@ func (b *ClickHouseServiceBinding) applyPerms(ctx context.Context, operation str
 	}
 
 	logDeferred := func(grant binding.BindingGrant) {
-		if isGrant {
-			b.Warn().Str("grant", grant.String()).Str("database", database).Str("table", grant.GrantTarget).
-				Msg("table does not exist yet; grant deferred until reconcile")
-		} else {
-			b.Warn().Str("grant", grant.String()).Str("database", database).Str("table", grant.GrantTarget).
-				Msg("table does not exist; revoke skipped")
-		}
+		b.Warn().Str("grant", grant.String()).Str("database", database).Str("table", grant.GrantTarget).
+			Msg("table does not exist yet; grant deferred until reconcile")
 	}
 
 	grantsDone := []binding.BindingGrant{}
@@ -459,7 +466,7 @@ func generateClickhousePassword() (string, error) {
 // quoteClickhouseIdent quotes an identifier with double quotes (ClickHouse
 // supports SQL-standard double-quoted identifiers alongside backticks).
 func quoteClickhouseIdent(name string) string {
-	return sqlbinding.QuoteIdentDouble(name)
+	return sqlbinding.QuoteIdentDouble(strings.ReplaceAll(name, `\`, `\\`))
 }
 
 // configKeys returns the keys of a service config map.
