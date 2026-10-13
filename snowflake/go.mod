@@ -1,9 +1,9 @@
 module github.com/openrundev/bindings/snowflake
 
-go 1.27.0
+go 1.27.2
 
 require (
-	github.com/openrundev/openrun/pkg/binding v0.20.0
+	github.com/openrundev/openrun/pkg/binding v0.20.1
 	github.com/snowflakedb/gosnowflake v1.19.1
 )
 

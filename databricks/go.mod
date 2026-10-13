@@ -1,11 +1,11 @@
 module github.com/openrundev/bindings/databricks
 
-go 1.27.0
+go 1.27.2
 
 require (
 	github.com/databricks/databricks-sdk-go v0.170.0
 	github.com/databricks/databricks-sql-go v1.14.0
-	github.com/openrundev/openrun/pkg/binding v0.20.0
+	github.com/openrundev/openrun/pkg/binding v0.20.1
 )
 
 require (
