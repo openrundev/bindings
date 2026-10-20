@@ -1,6 +1,6 @@
 module github.com/openrundev/bindings/clickhouse
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.47.0

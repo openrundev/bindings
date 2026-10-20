@@ -1,6 +1,6 @@
 module github.com/openrundev/bindings/oracle
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/openrundev/openrun/pkg/binding v0.20.3

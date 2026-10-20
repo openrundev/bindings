@@ -1,6 +1,6 @@
 module github.com/openrundev/bindings/databricks
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/databricks/databricks-sdk-go v0.170.0
