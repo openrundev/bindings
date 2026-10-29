@@ -89,10 +89,13 @@ build_provider() {
 
 cleanup() {
   "$OPENRUN_BIN" server stop >/dev/null 2>&1 || true
+  # Containers are started without --rm so an exited one keeps its logs for
+  # wait_for_service to dump; remove them here instead.
   local id
   for id in "$MONGODB_TEST_CONTAINER_ID" "$SQLSERVER_TEST_CONTAINER_ID" "$ORACLE_TEST_CONTAINER_ID" "$CLICKHOUSE_TEST_CONTAINER_ID"; do
     if [[ -n "$id" ]]; then
       $CONTAINER_COMMAND stop -t 1 "$id" >/dev/null 2>&1 || true
+      $CONTAINER_COMMAND rm -f "$id" >/dev/null 2>&1 || true
     fi
   done
 }
@@ -115,10 +118,14 @@ container_port() {
 }
 
 start_mongodb_container() {
-  local image="${OPENRUN_TEST_MONGODB_IMAGE:-mongo:8}"
+  # mongo:8 (8.0.34/8.3.13) refuses to start on kernels reporting 6.19+ and
+  # exits immediately (SERVER-121912). GitHub's ubuntu-24.04 runner image
+  # 20261018+ ships such a kernel, see actions/runner-images#15005. 9.0.4
+  # carries the fix (SERVER-131779); 8.3.14/8.0.35 do too once published.
+  local image="${OPENRUN_TEST_MONGODB_IMAGE:-mongo:9.0}"
   echo "Starting mongodb test container $image"
   # The root env vars make the official image start mongod with --auth
-  MONGODB_TEST_CONTAINER_ID=$($CONTAINER_COMMAND run --detach --rm \
+  MONGODB_TEST_CONTAINER_ID=$($CONTAINER_COMMAND run --detach \
     --env MONGO_INITDB_ROOT_USERNAME=root \
     --env MONGO_INITDB_ROOT_PASSWORD=mongo \
     --publish "127.0.0.1::27017" "$image")
@@ -144,7 +151,7 @@ start_sqlserver_container() {
   local image="${SQLSERVER_TESTCONTAINER_IMAGE:-mcr.microsoft.com/mssql/server:2022-latest}"
   export TEST_SQLSERVER_PASSWORD="OpenRun1Test!"
   echo "Starting sqlserver test container $image"
-  SQLSERVER_TEST_CONTAINER_ID=$($CONTAINER_COMMAND run --detach --rm \
+  SQLSERVER_TEST_CONTAINER_ID=$($CONTAINER_COMMAND run --detach \
     --publish "127.0.0.1::1433" \
     --env ACCEPT_EULA=Y \
     --env MSSQL_SA_PASSWORD="$TEST_SQLSERVER_PASSWORD" \
@@ -189,7 +196,7 @@ start_oracle_container() {
     service="FREEPDB1"
   fi
   echo "Starting oracle test container $image"
-  ORACLE_TEST_CONTAINER_ID=$($CONTAINER_COMMAND run --detach --rm \
+  ORACLE_TEST_CONTAINER_ID=$($CONTAINER_COMMAND run --detach \
     --publish "127.0.0.1::1521" \
     --env ORACLE_PASSWORD=oracle \
     "$image")
@@ -221,7 +228,7 @@ start_clickhouse_container() {
   echo "Starting clickhouse test container $image"
   # CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT lets the default user run the
   # access control DDL the binding needs (CREATE USER/ROLE, GRANT).
-  CLICKHOUSE_TEST_CONTAINER_ID=$($CONTAINER_COMMAND run --detach --rm \
+  CLICKHOUSE_TEST_CONTAINER_ID=$($CONTAINER_COMMAND run --detach \
     --env CLICKHOUSE_PASSWORD=clickhouse \
     --env CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 \
     --ulimit nofile=262144:262144 \
@@ -263,17 +270,28 @@ wait_for_socket() {
 wait_for_service() {
   # Retry until the service container accepts connections through the binding
   # path: create and delete a probe service (InitializeService pings the
-  # service). Providers are already installed at this point.
-  local service_type="$1" url="$2" attempt=0
+  # service). Providers are already installed at this point. The optional
+  # container id lets the loop stop early when the container has exited and
+  # dump its logs, instead of probing an empty port until the timeout.
+  local service_type="$1" url="$2" container_id="${3:-}" attempt=0 probe_err=""
   while [[ $attempt -lt 60 ]]; do
-    if "$OPENRUN_BIN" service create --config url="$url" "$service_type/readyprobe" >/dev/null 2>&1; then
+    if probe_err=$("$OPENRUN_BIN" service create --config url="$url" "$service_type/readyprobe" 2>&1 >/dev/null); then
       "$OPENRUN_BIN" service delete "$service_type/readyprobe" >/dev/null 2>&1 || true
       return 0
+    fi
+    if [[ -n "$container_id" ]] && [[ "$($CONTAINER_COMMAND inspect --format '{{.State.Running}}' "$container_id" 2>/dev/null)" != "true" ]]; then
+      echo "$service_type test container $container_id is no longer running" >&2
+      break
     fi
     sleep 1
     attempt=$((attempt + 1))
   done
   echo "Timed out waiting for $service_type test container to become ready" >&2
+  echo "Last probe error: $probe_err" >&2
+  if [[ -n "$container_id" ]]; then
+    $CONTAINER_COMMAND ps -a --filter "id=$container_id" >&2 || true
+    $CONTAINER_COMMAND logs --tail 50 "$container_id" >&2 || true
+  fi
   return 1
 }
 
@@ -375,17 +393,17 @@ wait_for_socket
 FAILED=0
 if [[ "$PROVIDER" == "mongodb" || "$PROVIDER" == "all" ]]; then
   "$OPENRUN_BIN" provider install mongodb --source-url "$MONGODB_PROVIDER_BIN"
-  wait_for_service mongodb "$TEST_MONGODB_URL"
+  wait_for_service mongodb "$TEST_MONGODB_URL" "$MONGODB_TEST_CONTAINER_ID"
   commander test $CL_TEST_VERBOSE "$SCRIPT_DIR/test_mongodb.yaml" || FAILED=1
 fi
 if [[ "$PROVIDER" == "sqlserver" || "$PROVIDER" == "all" ]]; then
   "$OPENRUN_BIN" provider install sqlserver --source-url "$SQLSERVER_PROVIDER_BIN"
-  wait_for_service sqlserver "$TEST_SQLSERVER_URL"
+  wait_for_service sqlserver "$TEST_SQLSERVER_URL" "$SQLSERVER_TEST_CONTAINER_ID"
   commander test $CL_TEST_VERBOSE "$SCRIPT_DIR/test_sqlserver.yaml" || FAILED=1
 fi
 if [[ "$PROVIDER" == "oracle" || "$PROVIDER" == "all" ]]; then
   "$OPENRUN_BIN" provider install oracle --source-url "$ORACLE_PROVIDER_BIN"
-  wait_for_service oracle "$TEST_ORACLE_URL"
+  wait_for_service oracle "$TEST_ORACLE_URL" "$ORACLE_TEST_CONTAINER_ID"
   commander test $CL_TEST_VERBOSE "$SCRIPT_DIR/test_oracle.yaml" || FAILED=1
 fi
 if [[ -n "$RUN_SNOWFLAKE" ]]; then
