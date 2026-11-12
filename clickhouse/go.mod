@@ -4,7 +4,7 @@ go 1.27.4
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.47.0
-	github.com/openrundev/openrun/pkg/binding v0.20.15
+	github.com/openrundev/openrun/pkg/binding v1.0.0
 )
 
 require (
